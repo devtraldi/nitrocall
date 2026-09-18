@@ -68,6 +68,10 @@ let miniTimer: ReturnType<typeof setInterval> | null = null;
 let statsTimer: ReturnType<typeof setInterval> | null = null;
 // Avisos de versão já dados (por vaga), para não repetir a cada atualização do chip.
 const versionNotes = new Map<number, string>();
+// Desde quando cada vaga está "procurando" (na sala, sem caminho): passa de 25 s → aviso.
+const searchingSince = new Map<number, number>();
+const UNREACHABLE_NOTICE_MS = 25_000;
+let unreachableShown = false;
 // Compartilhando a câmera (celular) em vez da tela; qual câmera.
 let sharingCamera = false;
 let cameraFacing: "user" | "environment" = "environment";
@@ -221,6 +225,7 @@ function renderSelfChip(): void {
 function renderPeerChip(view: PeerView): boolean {
   return ui.upsertChip({
     ...view,
+    name: view.unnamed ? t("chip.someone") : view.name,
     isSelf: false,
     iAmSharing: !!screenStream,
     quality: qualityOf(view.rttMs, view.lossPct, view.jitterMs),
@@ -352,35 +357,49 @@ function copyDiagnostics(): void {
   const text = diagnosticsText(snap);
   navigator.clipboard
     .writeText(text)
-    .then(() => ui.log(t("msg.diagCopied")))
-    .catch(() => ui.log(t("msg.copyFail")));
+    .then(() => ui.toast(t("msg.diagCopied")))
+    .catch(() => ui.toast(t("msg.copyFail")));
 }
 
-function copyInvite(): void {
+// Link da sala (sempre o site público, mesmo no app ou no arquivo local): quem recebe abre
+// com a sala preenchida e um nome sorteado; é só tocar em "Entrar".
+async function copyRoomLink(): Promise<void> {
   const code = ui.dom.roomCodeText().textContent?.trim() || ui.dom.roomCodeInput().value.trim();
   if (!code) return;
-  let text = t("msg.inviteText", { code });
-  let link: string | null = null;
-  if (native.isTauri()) {
-    text += `\n${t("msg.inviteApp", { link: native.inviteLink(code) })}`;
-  } else if (IS_WEB) {
-    link = native.webInviteLink(code);
-    text += `\n${link ? t("msg.inviteLink", { link }) : t("msg.inviteFile")}`;
+  const link = native.roomLink(code);
+  let ok = false;
+  try {
+    await navigator.clipboard.writeText(link);
+    ok = true;
+  } catch {
+    // Sem permissão de área de transferência (alguns navegadores): cópia pelo método antigo.
+    const area = document.createElement("textarea");
+    area.value = link;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    try {
+      ok = document.execCommand("copy");
+    } catch {
+      ok = false;
+    }
+    area.remove();
   }
-  // Celular: a folha de compartilhar do sistema (WhatsApp etc.) é mais natural que copiar.
-  if (isMobile() && typeof navigator.share === "function") {
-    navigator
-      .share({ text })
-      .then(() => ui.log(t("msg.inviteShared")))
-      .catch(() => {
-        /* cancelado */
-      });
+  if (!ok) {
+    ui.toast(t("msg.copyFail"));
     return;
   }
-  navigator.clipboard
-    .writeText(text)
-    .then(() => ui.log(t("msg.inviteCopied")))
-    .catch(() => ui.log(t("msg.copyFail")));
+  const fb = ui.dom.copyFeedback();
+  fb.textContent = t("call.linkCopied");
+  ui.dom.copyRoomBtn().classList.add("copied");
+  setTimeout(() => {
+    fb.textContent = "";
+    ui.dom.copyRoomBtn().classList.remove("copied");
+  }, 2200);
+  ui.toast(t("call.linkCopiedToast"));
+  ui.log(t("msg.codeCopied", { code }));
 }
 
 function updateMicButton(): void {
@@ -405,7 +424,7 @@ async function refreshMicList(): Promise<void> {
     option.selected = mic.deviceId === current;
     select.appendChild(option);
   });
-  select.disabled = mics.length < 2;
+  ui.dom.micRow().classList.toggle("hidden", mics.length < 2);
 }
 
 function wireScreenEnded(stream: MediaStream): void {
@@ -550,6 +569,8 @@ function leaveRoom(): void {
   speakingNow.clear();
   peerViews.clear();
   versionNotes.clear();
+  searchingSince.clear();
+  unreachableShown = false;
   ui.setVersionBanner(null);
   closeMini();
   if (miniTimer) clearInterval(miniTimer);
@@ -620,6 +641,7 @@ async function joinRoom(): Promise<void> {
     turnEndpoint,
     callbacks: {
       onStatus: ui.log,
+      onAuthMismatch: () => ui.setNotice(t("notice.auth")),
       onSelf: (slot) => {
         mySlot = slot;
         ui.dom.selfLabel().textContent = t("call.youAreSlot", { name: myName, slot });
@@ -627,7 +649,13 @@ async function joinRoom(): Promise<void> {
       },
       onBrokerState: ui.setBrokerPill,
       onPeerUpdate: (view) => {
+        const prev = peerViews.get(view.slot);
+        if (view.presence === "searching") {
+          if (!searchingSince.has(view.slot)) searchingSince.set(view.slot, Date.now());
+        } else searchingSince.delete(view.slot);
+        refreshUnreachableNotice();
         peerViews.set(view.slot, view);
+        if (prev?.verified !== view.verified) ui.setSecurePill(undefined, [...peerViews.values()].some((v) => v.verified === "mismatch"));
         fixNameClash(view);
         const created = renderPeerChip(view);
         if (created && Date.now() - joinedAt > CHIME_GRACE_MS) playChime("join");
@@ -647,6 +675,9 @@ async function joinRoom(): Promise<void> {
       },
       onPeerRemoved: (slot, _name, cause) => {
         peerViews.delete(slot);
+        searchingSince.delete(slot);
+        refreshUnreachableNotice();
+        ui.setSecurePill(undefined, [...peerViews.values()].some((v) => v.verified === "mismatch"));
         versionNotes.delete(slot);
         refreshVersionBanner();
         ui.removeChip(slot);
@@ -696,7 +727,18 @@ async function joinRoom(): Promise<void> {
   void refreshOutputList();
   void requestWakeLock();
   mediaKeepAlive = setInterval(ui.ensureMediaPlaying, MEDIA_KEEPALIVE_MS);
-  statsTimer = setInterval(refreshScreenStats, 1000);
+  statsTimer = setInterval(() => {
+    refreshScreenStats();
+    refreshUnreachableNotice();
+  }, 1000);
+}
+
+function refreshUnreachableNotice(): void {
+  const now = Date.now();
+  const stuck = [...searchingSince.values()].some((since) => now - since > UNREACHABLE_NOTICE_MS);
+  if (stuck === unreachableShown) return;
+  unreachableShown = stuck;
+  ui.setNotice(stuck ? t("notice.unreachable") : null);
 }
 
 // Nome aleatório igual ao de alguém que já estava na sala: quem chegou depois sorteia outro.
@@ -815,7 +857,15 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   if (ui.dom.passwordInput().value) ui.dom.joinMore().open = true;
   ui.dom.mobileNote().classList.toggle("hidden", canShareScreen());
+  ui.dom.qualityRow().classList.toggle("hidden", !canShareScreen());
   wireMoreMenu();
+  ui.onAutoplayBlocked(() => ui.dom.tapAudioBtn().classList.remove("hidden"));
+  ui.onCopyDiagnostics(copyDiagnostics);
+  ui.dom.tapAudioBtn().addEventListener("click", () => {
+    ui.dom.tapAudioBtn().classList.add("hidden");
+    void getAudioContext().resume().catch(() => {});
+    ui.ensureMediaPlaying();
+  });
   noiseOn = load(STORAGE.noise) !== "0";
   ui.setNoiseButton(noiseOn ? "on" : "off");
   ui.setLogSink(native.appendLog);
@@ -867,8 +917,10 @@ window.addEventListener("DOMContentLoaded", () => {
     ui.log(ok ? t("msg.outputOk") : t("msg.outputFail"));
   });
   ui.dom.noiseBtn().addEventListener("click", () => void toggleNoise());
-  ui.dom.diagCopyBtn().addEventListener("click", copyDiagnostics);
-  ui.dom.inviteBtn().addEventListener("click", copyInvite);
+  ui.dom.diagCopyBtn().addEventListener("click", () => {
+    closeMore();
+    copyDiagnostics();
+  });
   ui.dom.updateBtn().addEventListener("click", () => {
     if (!pendingUpdate) return;
     ui.dom.updateBtn().disabled = true;
@@ -924,25 +976,17 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   window.addEventListener("pageshow", () => void recoverMedia());
   ui.dom.selfPip().addEventListener("click", () => ui.dom.selfPip().classList.toggle("large"));
+  // Botões dentro da prévia não ampliam/reduzem a prévia.
+  for (const b of [ui.dom.switchScreenBtn(), ui.dom.screenAudioBtn()]) b.addEventListener("click", (e) => e.stopPropagation());
 
   ui.dom.diagBtn().addEventListener("click", () => {
     closeMore();
     const logEl = ui.dom.statusLog();
     logEl.classList.toggle("hidden");
-    ui.dom.diagCopyBtn().classList.toggle("hidden", logEl.classList.contains("hidden"));
-    if (IS_WEB) ui.dom.diagSaveBtn().classList.toggle("hidden", logEl.classList.contains("hidden"));
     logEl.scrollTop = logEl.scrollHeight;
   });
 
-  ui.dom.copyRoomBtn().addEventListener("click", async () => {
-    const code = ui.dom.roomCodeText().textContent ?? "";
-    try {
-      await navigator.clipboard.writeText(code);
-      ui.log(t("msg.codeCopied", { code }));
-    } catch {
-      ui.log(t("msg.copyFail"));
-    }
-  });
+  ui.dom.copyRoomBtn().addEventListener("click", () => void copyRoomLink());
 
   ui.dom.leaveBtn().addEventListener("click", leaveRoom);
 
@@ -964,10 +1008,17 @@ window.addEventListener("DOMContentLoaded", () => {
       room?.leave();
     });
     document.addEventListener("keydown", onMuteShortcut);
-    ui.dom.diagSaveBtn().addEventListener("click", saveDiagnostics);
+    ui.dom.diagSaveBtn().classList.remove("hidden");
+    ui.dom.diagSaveBtn().addEventListener("click", () => {
+      closeMore();
+      saveDiagnostics();
+    });
     if (miniSupported() && !isMobile()) {
       ui.dom.miniBtn().classList.remove("hidden");
-      ui.dom.miniBtn().addEventListener("click", () => void toggleMini());
+      ui.dom.miniBtn().addEventListener("click", () => {
+        closeMore();
+        void toggleMini();
+      });
     }
   }
 });

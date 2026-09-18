@@ -12,6 +12,8 @@ export interface ChipModel {
   audio: "self" | "connecting" | "ok" | "degraded";
   presence: "self" | "direct" | "relay" | "searching";
   viaName: string | null;
+  // Nome ainda desconhecido (vaga ocupada, sem contato): mostramos "Alguém na sala".
+  unnamed?: boolean;
   // A mídia passa pelo TURN (último recurso).
   turn: boolean;
   // Saiu da aba/app no celular.
@@ -27,6 +29,8 @@ export interface ChipModel {
   lossPct: number | null;
   jitterMs: number | null;
   securityCode: string | null;
+  // Verificação automática do código de segurança (ver roomManager).
+  verified?: "ok" | "mismatch" | "pending" | null;
   // Só no chip próprio: o que o app mediu sobre este PC.
   self: SelfHealth | null;
 }
@@ -90,6 +94,12 @@ export const dom = {
   healthPill: () => el<HTMLElement>("#health-pill"),
   securePill: () => el<HTMLElement>("#secure-pill"),
   roomCodeText: () => el<HTMLElement>("#room-code-text"),
+  copyFeedback: () => el<HTMLElement>("#copy-feedback"),
+  noticeBanner: () => el<HTMLElement>("#notice-banner"),
+  tapAudioBtn: () => el<HTMLButtonElement>("#tap-audio-btn"),
+  toast: () => el<HTMLElement>("#toast"),
+  micRow: () => el<HTMLElement>("#mic-row"),
+  qualityRow: () => el<HTMLElement>("#quality-row"),
   copyRoomBtn: () => el<HTMLButtonElement>("#copy-room-btn"),
   selfLabel: () => el<HTMLElement>("#self-label"),
   brokerPill: () => el<HTMLElement>("#broker-pill"),
@@ -109,7 +119,6 @@ export const dom = {
   diagCopyBtn: () => el<HTMLButtonElement>("#diag-copy-btn"),
   outputSelect: () => el<HTMLSelectElement>("#output-select"),
   noiseBtn: () => el<HTMLButtonElement>("#noise-btn"),
-  inviteBtn: () => el<HTMLButtonElement>("#invite-btn"),
   autostartLabel: () => el<HTMLElement>("#autostart-label"),
   autostartInput: () => el<HTMLInputElement>("#autostart-input"),
   updateBanner: () => el<HTMLElement>("#update-banner"),
@@ -203,7 +212,7 @@ function chipSubText(m: ChipModel): string {
     else if (s && s.quality) parts.push(t("chip.noBridge"));
     return parts.length ? parts.join(" · ") : t("chip.yourMic");
   }
-  if (m.presence === "searching") return t("chip.searching");
+  if (m.presence === "searching") return m.unnamed ? t("chip.connecting") : t("chip.searching");
   const via =
     m.presence === "relay" && m.viaName ? t("chip.via", { name: m.viaName }) : m.turn ? t("chip.viaTurn") : "";
   if (m.away) return `${t("chip.away")}${via}`;
@@ -238,17 +247,13 @@ export function upsertChip(m: ChipModel): boolean {
       `<span class="ico ico-see">👁️</span>` +
       `<span class="ico ico-share">🖥️</span>` +
       `<span class="ico ico-bridge">🌉</span>` +
+      `<span class="ico ico-lock"></span>` +
       `<span class="signal" title=""><i></i><i></i><i></i><i></i></span>` +
-      (m.isSelf ? "" : `<span class="chip-volume">🔉<input type="range" min="10" max="100" value="100" /></span>`) +
       `</div>`;
     if (!m.isSelf) {
-      const slider = chip.querySelector<HTMLInputElement>(".chip-volume input")!;
-      const initial = loadVolume(m.name);
-      personVolumes.set(m.slot, initial);
-      slider.value = String(Math.round(initial * 100));
-      slider.addEventListener("input", () => setPersonVolume(m.slot, m.name, Number(slider.value) / 100));
-      slider.addEventListener("click", (e) => e.stopPropagation());
-      chip.addEventListener("click", () => toggleSecurityPopover(chip!));
+      personVolumes.set(m.slot, loadVolume(m.name));
+      const c = chip;
+      c.addEventListener("click", () => togglePersonPanel(c));
     }
     if (m.isSelf) list.prepend(chip);
     else {
@@ -268,6 +273,10 @@ export function upsertChip(m: ChipModel): boolean {
   chip.dataset.bridging = String(m.bridging);
   chip.dataset.cap = String(m.cap);
   chip.dataset.security = m.securityCode ?? "";
+  chip.dataset.verified = m.verified ?? "";
+  chip.dataset.via = m.viaName ?? "";
+  chip.dataset.rtt = m.rttMs === null ? "" : String(m.rttMs);
+  chip.dataset.loss = m.lossPct === null ? "" : String(m.lossPct);
   chip.dataset.name = m.name;
   chip.dataset.quality = m.isSelf ? (m.self?.quality ?? "") : (m.quality ?? "");
   chip.title = m.away
@@ -279,8 +288,13 @@ export function upsertChip(m: ChipModel): boolean {
         : m.presence === "searching"
           ? t("chip.searchingTitle", { name: m.name })
           : "";
-  const vol = chip.querySelector<HTMLElement>(".chip-volume");
-  if (vol) vol.title = t("chip.volumeTitle");
+  const lock = chip.querySelector<HTMLElement>(".ico-lock")!;
+  lock.textContent = m.verified === "ok" ? "🔒" : m.verified === "mismatch" ? "⚠️" : "";
+  lock.title = m.verified === "ok" ? t("chip.verified") : m.verified === "mismatch" ? t("chip.mismatch") : "";
+  lock.classList.toggle("hidden", m.isSelf || (m.verified !== "ok" && m.verified !== "mismatch"));
+  lock.classList.add("on");
+  // Painel aberto desta pessoa acompanha as mudanças (verificação, caminho, latência).
+  if (chip.querySelector(".chip-popover")) fillPersonPanel(chip, chip.querySelector<HTMLElement>(".chip-popover")!);
   chip.querySelector<HTMLElement>(".ico-share")!.title = t("chip.shareTitle");
   chip.querySelector<HTMLElement>(".ico-bridge")!.title = t("chip.bridgeTitle");
   const avatar = chip.querySelector<HTMLElement>(".avatar")!;
@@ -362,42 +376,89 @@ export function setHealthPill(h: RoomHealth = lastHealth): void {
 
 let lastSecure: boolean | null = null;
 
-export function setSecurePill(secure: boolean | null = lastSecure): void {
+let lastWarn = false;
+
+export function setSecurePill(secure: boolean | null = lastSecure, warn: boolean = lastWarn): void {
   lastSecure = secure;
+  lastWarn = warn;
   const pill = dom.securePill();
   pill.dataset.state = secure === null ? "pending" : secure ? "on" : "pending";
-  pill.textContent = secure ? t("secure.on") : "🔒";
-  pill.title = secure ? t("secure.onTitle") : t("secure.pendingTitle");
+  pill.dataset.warn = String(warn);
+  pill.textContent = warn ? "⚠️" : secure ? t("secure.on") : "🔒";
+  pill.title = warn ? t("secure.warn") : secure ? t("secure.onTitle") : t("secure.pendingTitle");
 }
 
-function toggleSecurityPopover(chip: HTMLElement): void {
+// Painel de uma pessoa (toque no nome): verificação automática da ligação (a resposta, não
+// um código para comparar), o caminho, a latência e o volume dela só para você.
+function togglePersonPanel(chip: HTMLElement): void {
   const existing = chip.querySelector(".chip-popover");
   for (const p of document.querySelectorAll(".chip-popover")) p.remove();
   if (existing) return;
   const pop = document.createElement("div");
   pop.className = "chip-popover";
-  const code = chip.dataset.security;
-  const name = chip.dataset.name ?? "";
-  // Nomes vêm dos outros participantes: sempre como texto, nunca como HTML.
-  const title = document.createElement("strong");
-  const hint = document.createElement("span");
-  hint.className = "hint";
-  if (code) {
-    title.textContent = t("sec.title", { name });
-    const c = document.createElement("code");
-    c.textContent = code;
-    hint.textContent = t("sec.hint", { name });
-    pop.append(title, c, hint);
-  } else {
-    title.textContent = t("sec.pendingTitle");
-    hint.textContent = t("sec.pending", { name });
-    pop.append(title, hint);
-  }
+  fillPersonPanel(chip, pop);
   pop.addEventListener("click", (e) => e.stopPropagation());
   chip.appendChild(pop);
   setTimeout(() => {
     document.addEventListener("click", () => pop.remove(), { once: true });
   }, 0);
+}
+
+function fillPersonPanel(chip: HTMLElement, pop: HTMLElement): void {
+  // Nomes vêm dos outros participantes: sempre como texto, nunca como HTML.
+  const name = chip.dataset.name ?? "";
+  const slot = Number(chip.dataset.slot);
+  const presence = chip.dataset.presence;
+  const via = chip.dataset.via ?? "";
+  const verified = chip.dataset.verified;
+  const line = (text: string, cls = "") => {
+    const d = document.createElement("div");
+    d.className = cls;
+    d.textContent = text;
+    return d;
+  };
+  const title = document.createElement("strong");
+  title.textContent = name;
+  const rows: HTMLElement[] = [title];
+  if (presence === "searching") rows.push(line(t("panel.searching"), "pp-status"));
+  else if (presence === "relay" && via) rows.push(line(t("panel.bridge", { via }), "pp-status"));
+  else if (verified === "ok") rows.push(line(t("panel.ok"), "pp-status ok"));
+  else if (verified === "mismatch") rows.push(line(t("panel.mismatch"), "pp-status bad"));
+  else rows.push(line(t("panel.pending"), "pp-status"));
+  if (presence === "direct") rows.push(line(chip.dataset.turn === "true" ? t("panel.turn") : t("panel.direct"), "hint"));
+  else if (presence === "relay" && via) rows.push(line(t("panel.viaPath", { via }), "hint"));
+  if (chip.dataset.rtt) {
+    const loss = chip.dataset.loss ? t("chip.loss", { n: chip.dataset.loss }) : "";
+    rows.push(line(t("panel.latency", { rtt: chip.dataset.rtt, loss }), "hint"));
+  }
+  // Volume: mantém o controle vivo (não recria enquanto a pessoa arrasta).
+  let vol = pop.querySelector<HTMLElement>(".pp-volume");
+  if (!vol) {
+    vol = document.createElement("label");
+    vol.className = "pp-volume";
+    const cap = document.createElement("span");
+    const input = document.createElement("input");
+    input.type = "range";
+    input.min = "0";
+    input.max = "100";
+    input.value = String(Math.round((personVolumes.get(slot) ?? 1) * 100));
+    input.addEventListener("input", () => setPersonVolume(slot, name, Number(input.value) / 100));
+    vol.append(cap, input);
+  }
+  vol.querySelector("span")!.textContent = `🔉 ${t("panel.volume")}`;
+  const note = line(t("panel.note"), "hint pp-note");
+  if (verified !== "ok" && verified !== "mismatch") note.classList.add("hidden");
+  const extra: HTMLElement[] = [];
+  if (presence === "searching" && copyDiagnosticsFn) {
+    const diag = document.createElement("button");
+    diag.type = "button";
+    diag.className = "btn small pp-diag";
+    diag.textContent = t("ctl.diagCopy");
+    const fn = copyDiagnosticsFn;
+    diag.addEventListener("click", () => fn());
+    extra.push(diag);
+  }
+  pop.replaceChildren(...rows, ...(presence === "searching" ? [] : [vol]), ...extra, note);
 }
 
 export function setChipSpeaking(key: "self" | number, speaking: boolean): void {
@@ -582,7 +643,7 @@ export function setScreenStream(slot: number, stream: MediaStream | null): void 
   const video = document.querySelector<HTMLVideoElement>(`#screen-${slot} video`);
   if (!video) return;
   if (video.srcObject !== stream) video.srcObject = stream;
-  if (stream) video.play().catch(() => {});
+  if (stream) tryPlay(video);
 }
 
 export function removeScreenTile(slot: number): void {
@@ -676,7 +737,7 @@ export function setRemoteAudio(slot: number, stream: MediaStream | null): void {
   }
   audio.muted = outputMuted;
   if (audio.srcObject !== stream) audio.srcObject = stream;
-  if (stream) audio.play().catch(() => {});
+  if (stream) tryPlay(audio);
 }
 
 export function setOutputMuted(on: boolean): void {
@@ -695,15 +756,52 @@ export function removeRemoteAudio(slot: number): void {
 }
 
 // Autoplay pode pausar um elemento (foco, políticas, troca de dispositivo de saída);
-// nunca deixamos um stream válido parado.
+// nunca deixamos um stream válido parado. Se o navegador exigir um toque (iPhone), o
+// botão "Toque para ouvir" aparece e libera tudo de uma vez.
+let autoplayBlocked: (() => void) | null = null;
+
+export function onAutoplayBlocked(fn: () => void): void {
+  autoplayBlocked = fn;
+}
+
+function tryPlay(m: HTMLMediaElement): void {
+  m.play().catch((err: unknown) => {
+    if ((err as { name?: string })?.name === "NotAllowedError") autoplayBlocked?.();
+  });
+}
+
 export function ensureMediaPlaying(): void {
   const media = [
     ...dom.audioSink().querySelectorAll("audio"),
     ...dom.screens().querySelectorAll("video"),
   ];
   for (const m of media) {
-    if (m.srcObject && m.paused) m.play().catch(() => {});
+    if (m.srcObject && m.paused) tryPlay(m);
   }
+}
+
+// Botão de diagnóstico dentro do painel de quem não conecta (o lugar onde a pessoa olha).
+let copyDiagnosticsFn: (() => void) | null = null;
+
+export function onCopyDiagnostics(fn: () => void): void {
+  copyDiagnosticsFn = fn;
+}
+
+// Aviso curto no topo (ex.: "Link copiado").
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function toast(text: string, ms = 2600): void {
+  const el = dom.toast();
+  el.textContent = text;
+  el.classList.remove("hidden");
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.add("hidden"), ms);
+}
+
+export function setNotice(text: string | null): void {
+  const banner = dom.noticeBanner();
+  banner.classList.toggle("hidden", !text);
+  banner.textContent = text ?? "";
 }
 
 // ----------------------------------------------------------------------------
@@ -755,13 +853,13 @@ export function setScreenAudioButton(state: "hidden" | "none" | "on" | "off" = s
   btn.disabled = state === "none";
   btn.classList.toggle("active", state === "off");
   if (state === "none") {
-    btn.textContent = t("ctl.screenAudioNone");
+    setIconButton(btn, t("ctl.screenAudioNone"));
     btn.title = t("ctl.screenAudioNoneTitle");
   } else if (state === "on") {
-    btn.textContent = t("ctl.screenAudioOn");
+    setIconButton(btn, t("ctl.screenAudioOn"));
     btn.title = t("ctl.screenAudioOnTitle");
   } else {
-    btn.textContent = t("ctl.screenAudioOff");
+    setIconButton(btn, t("ctl.screenAudioOff"));
     btn.title = t("ctl.screenAudioOffTitle");
   }
 }
@@ -787,5 +885,7 @@ export function resetCallUi(): void {
   for (const p of document.querySelectorAll(".chip-popover")) p.remove();
   personVolumes.clear();
   setShareQuality("");
+  setNotice(null);
+  dom.tapAudioBtn().classList.add("hidden");
   dom.selfPip().classList.remove("large");
 }

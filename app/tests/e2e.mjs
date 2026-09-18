@@ -13,6 +13,13 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium, devices } from "playwright";
 
+// A qualidade fica no menu "⋯": abre o menu, escolhe e fecha (como a pessoa faria).
+async function pickQuality(page, value) {
+  await page.click("#more-btn");
+  await page.selectOption("#quality-select", value);
+  await page.keyboard.press("Escape");
+}
+
 const bin = (rel) => fileURLToPath(new URL(`../node_modules/${rel}`, import.meta.url));
 const PEER_PORT = Number(process.env.PEER_PORT || 9010);
 const NOSTR_PORT = Number(process.env.NOSTR_PORT || 9020);
@@ -20,8 +27,10 @@ const VITE_PORT = Number(process.env.VITE_PORT || 1420);
 const TURN_PORT = Number(process.env.TURN_PORT || 3479);
 const TURN_HTTP_PORT = Number(process.env.TURN_HTTP_PORT || 9030);
 // TURN_URL=https://… usa um Worker de verdade (ex.: o da Cloudflare) no lugar do TURN local.
-const TURN_OK = process.env.TURN_URL || `http://127.0.0.1:${TURN_HTTP_PORT}/turn`;
-const TURN_BROKEN = `http://127.0.0.1:${TURN_HTTP_PORT}/turn-broken`;
+// "localhost", não 127.0.0.1: a CSP do NitroCall.html só libera http://localhost:* (e https).
+const TURN_OK = process.env.TURN_URL || `http://localhost:${TURN_HTTP_PORT}/turn`;
+const TURN_BROKEN = `http://localhost:${TURN_HTTP_PORT}/turn-broken`;
+const TURN_SLOW = `http://localhost:${TURN_HTTP_PORT}/turn-slow`;
 // TURN_ALL=1: todo mundo recebe credenciais TURN (como será com o Worker no ar).
 const TURN_DEFAULT = process.env.TURN_ALL ? TURN_OK : null;
 // PUBLIC_BROKER=1 usa o servidor público do PeerJS (o mesmo que os usuários usam) em
@@ -490,6 +499,49 @@ async function scenarioNat() {
   }
   for (const u of [ana, beto]) await u.browser.close();
 
+  console.log("\n[N4] iPhone no 4G (só relay, Worker lento) + PC sem TURN (app antigo): conecta rápido e mostra quem está");
+  const room4 = `${ROOM}-nat4`;
+  const pc4 = await makeUser("PC", { room: room4, turn: null });
+  await sleep(1500);
+  const t4 = Date.now();
+  const cel4 = await makeUser("iPhone", { room: room4, relayOnly: true, turn: TURN_SLOW, device: "iPhone 13" });
+  await sleep(2500);
+  await waitFor("iPhone mostra 'Alguém na sala' (ou já o PC) enquanto liga — nunca 'Só você'", async () => {
+    const s = await snapshot(cel4.page);
+    return !s.health.includes("Só você") && s.chips.some((c) => c.id !== "chip-self" && (c.name === "Alguém na sala" || c.name === "PC"));
+  }, 3000);
+  const ok4 = await waitFor("PC e iPhone se ouvem", async () => {
+    const a = remoteChip(await snapshot(pc4.page), "iPhone");
+    const b = remoteChip(await snapshot(cel4.page), "PC");
+    return a?.audio === "ok" && b?.audio === "ok";
+  }, 60000);
+  const took4 = Date.now() - t4;
+  console.log(`    (tempo até se ouvirem: ${(took4 / 1000).toFixed(1)}s)`);
+  if (!ok4) await natDiagnostics([pc4, cel4]);
+  await waitFor("Conectou em até 12 s (Worker lento incluído)", async () => ok4 && took4 < 12000, 500);
+  for (const u of [pc4, cel4]) await u.browser.close();
+
+  console.log("\n[N5] Caminho impossível (sem TURN nenhum): o iPhone diz isso com clareza e oferece o diagnóstico");
+  const room5n = `${ROOM}-nat5`;
+  const pc5 = await makeUser("PC", { room: room5n, turn: null });
+  await sleep(1500);
+  const cel5 = await makeUser("iPhone", { room: room5n, relayOnly: true, turn: TURN_BROKEN, device: "iPhone 13" });
+  await waitFor("iPhone mostra 'Alguém na sala' (não 'Só você')", async () => {
+    const s = await snapshot(cel5.page);
+    return !s.health.includes("Só você") && s.chips.some((c) => c.id !== "chip-self" && c.name === "Alguém na sala");
+  }, 8000);
+  await waitFor("Depois de ~25 s, aviso claro de que não conectou", async () =>
+    cel5.page.evaluate(() => {
+      const b = document.querySelector("#notice-banner");
+      return !!b && !b.classList.contains("hidden") && b.textContent.includes("não consegui conectar");
+    }), 40000);
+  await cel5.page.click('#participants .chip:not(#chip-self)');
+  await waitFor("Painel de 'Alguém na sala' tem 'Copiar diagnóstico'", async () => !!(await cel5.page.$(".chip-popover .pp-diag")), 3000);
+  await waitFor("Registro diz por que não fechou (ICE: locais/remotos, TURN não)", async () =>
+    cel5.logs.some((l) => l.includes("ICE:") && l.includes("TURN não")), 20000);
+  console.log(`    exemplo: ${cel5.logs.find((l) => l.includes("ICE:"))?.slice(12) ?? "-"}`);
+  for (const u of [pc5, cel5]) await u.browser.close();
+
   console.log("\n[N3] Worker de credenciais fora do ar: entra e fala como antes");
   const room3 = `${ROOM}-nat3`;
   const caio = await makeUser("Caio", { room: room3, turn: TURN_BROKEN });
@@ -631,7 +683,7 @@ async function scenarioHdQuality() {
   const vera = await makeUser("Vera", { room, hd: true });
   const all = [sofia, tiago, vera];
   for (const u of all) await expectAudioOk(u, all.filter((o) => o !== u));
-  await sofia.page.selectOption("#quality-select", "alta");
+  await pickQuality(sofia.page, "alta");
   await sofia.page.click("#share-screen-btn");
   for (const v of [tiago, vera]) {
     await waitFor(`${v.name} recebe a tela de Sofia em 1080p (≥ 20 fps)`, async () => {
@@ -650,7 +702,7 @@ async function scenarioHdQuality() {
   const falseAlarms = async () =>
     sofia.page.evaluate(() => [...document.querySelectorAll("#status-log div")].map((d) => d.textContent ?? "").filter((t) => /rede fraca|automático: (banda|perda)/.test(t)));
   await waitFor("Nenhum falso 'rede fraca' em Alta", async () => (await falseAlarms()).length === 0, 1000);
-  await sofia.page.selectOption("#quality-select", "auto");
+  await pickQuality(sofia.page, "auto");
   await sleep(30000);
   await waitFor("Auto numa rede boa fica em Alta (sem descer à toa)", async () => {
     const d = await sofia.page.evaluate(() => window.__NITRO_DEBUG__?.());
@@ -715,6 +767,8 @@ async function main() {
   await expectAudioOk(bob, [alice]);
   await expectHears(alice, [bob]);
   await expectHears(bob, [alice]);
+  await waitFor("Alice vê Bob verificado (🔒, sem comparar códigos)", async () =>
+    alice.page.evaluate(() => [...document.querySelectorAll("#participants .chip")].find((c) => c.dataset.name === "Bob")?.dataset.verified === "ok"), 20000);
 
   console.log("\n[2] Carol entra (3 pessoas)");
   const carol = await makeUser("Carol");
@@ -967,6 +1021,13 @@ async function main() {
   const noah = await makeUser("Noah", { room: room5, password: "outra" });
   await sleep(8000);
   await waitFor("Mia não vê Noah (senha diferente)", async () => !remoteChip(await snapshot(mia.page), "Noah"), 5000);
+  await waitFor("Os dois veem o aviso de senha diferente", async () => {
+    const vis = (u) => u.page.evaluate(() => {
+      const b = document.querySelector("#notice-banner");
+      return !!b && !b.classList.contains("hidden") && b.textContent.includes("senha");
+    });
+    return (await vis(mia)) && (await vis(noah));
+  }, 15000);
   await noah.page.click("#leave-btn");
   await sleep(500);
   const olivia = await makeUser("Olivia", { room: room5, password: "segredo" });
@@ -988,7 +1049,7 @@ async function main() {
     const d = await debug(page);
     return d?.links?.find((l) => l.name === "screenOut")?.maxBitrate ?? null;
   };
-  await kate.page.selectOption("#quality-select", "media");
+  await pickQuality(kate.page, "media");
   await kate.page.click("#share-screen-btn");
   await expectScreenPlaying(leo, kate, { audio: true });
   await waitFor("Kate compartilha em Média: prévia mostra 'Média' e teto de 2500 kbps aplicado", async () => {
@@ -996,13 +1057,13 @@ async function main() {
     const q = await kate.page.evaluate(() => document.querySelector("#pip-quality")?.textContent ?? "");
     return snap.pip !== null && q.includes("Média") && (await outCap(kate.page)) === 2_500_000;
   });
-  await kate.page.selectOption("#quality-select", "baixa");
+  await pickQuality(kate.page, "baixa");
   await waitFor("Mudou para Baixa ao vivo: teto 600 kbps, Leo continua vendo", async () => {
     const q = await kate.page.evaluate(() => document.querySelector("#pip-quality")?.textContent ?? "");
     const s = screenOf(await snapshot(leo.page), "Kate");
     return q.includes("Baixa") && (await outCap(kate.page)) === 800_000 && s?.state === "ok" && s.playing;
   });
-  await kate.page.selectOption("#quality-select", "alta");
+  await pickQuality(kate.page, "alta");
   // Alta tem teto explícito alto (6 Mbps): sem ele o Chromium prende a tela em 360p.
   await waitFor("Mudou para Alta: teto de 12 Mbps", async () => {
     const q = await kate.page.evaluate(() => document.querySelector("#pip-quality")?.textContent ?? "");
@@ -1014,7 +1075,7 @@ async function main() {
     window.__NITRO_ADAPT__ = { bwBadSamples: 2, goodSamples: 2, stepDownCooldownMs: 2000, upHoldMs: 2000, upHoldMaxMs: 4000, oscillationWindowMs: 1000 };
     window.__NITRO_FAKE_LOSS__ = 15;
   });
-  await kate.page.selectOption("#quality-select", "auto");
+  await pickQuality(kate.page, "auto");
   await waitFor("Auto desceu para Média por perda de pacotes", async () => {
     const d = await debug(kate.page);
     const q = await kate.page.evaluate(() => document.querySelector("#pip-quality")?.textContent ?? "");
@@ -1115,7 +1176,7 @@ async function main() {
   await kate2.page.evaluate(() => {
     window.__NITRO_ADAPT__ = { bwBadSamples: 2, stepDownCooldownMs: 2000, treeHoldMs: 20000, treeMinViewers: 3, goodSamples: 2, upHoldMs: 2000 };
   });
-  await kate2.page.selectOption("#quality-select", "auto");
+  await pickQuality(kate2.page, "auto");
   await kate2.page.click("#share-screen-btn");
   for (const v of viewers) await expectScreenPlaying(v, kate2, { timeoutMs: 40000 });
   await kate2.page.evaluate(() => { window.__NITRO_FAKE_LOSS__ = 15; });

@@ -63,17 +63,15 @@
           <img src="/src/assets/logo-mark.png" alt="" class="logo-mark" />
           <span class="brand-name">NitroCall</span>
         </div>
-        <div class="room-info">
-          <button id="copy-room-btn" class="room-code" type="button" data-i18n-title="call.copyRoom">
-            <span id="room-code-text"></span><span class="copy-icon">⧉</span>
-          </button>
-          <button id="invite-btn" class="btn ghost small" type="button" data-i18n-title="call.inviteTitle">✉️ <span class="lbl" data-i18n="call.invite"></span></button>
-          <span id="self-label" class="self-label"></span>
-        </div>
+        <button id="copy-room-btn" class="room-link" type="button" data-i18n-title="call.copyLinkTitle">
+          <span class="room-link-ico" aria-hidden="true">🔗</span>
+          <span id="room-code-text"></span>
+          <span id="copy-feedback" class="copy-feedback" aria-live="polite"></span>
+        </button>
         <div class="pills">
+          <div id="broker-pill" class="pill pill-connecting"></div>
           <div id="health-pill" class="pill pill-health" data-state="connecting" data-i18n-title="health.title"></div>
           <div id="secure-pill" class="pill pill-secure" data-state="pending">🔒</div>
-          <div id="broker-pill" class="pill pill-connecting"></div>
         </div>
       </header>
 
@@ -81,7 +79,9 @@
 
       <div id="update-banner" class="update-banner hidden"><span id="update-text"></span><button id="update-btn" class="btn primary small" type="button" data-i18n="update.now"></button></div>
       <div id="version-banner" class="update-banner version-banner hidden"></div>
+      <div id="notice-banner" class="update-banner notice-banner hidden"></div>
       <div id="bridge-banner" class="bridge-banner hidden"></div>
+      <button id="tap-audio-btn" class="tap-audio hidden" type="button" data-i18n="call.tapAudio"></button>
 
       <div id="stage" class="stage">
         <div id="screens" class="screens" data-count="0"></div>
@@ -96,45 +96,51 @@
       <div id="status-log" class="status-log hidden"></div>
 
       <footer class="controls">
-        <button id="toggle-mic-btn" class="btn" type="button"></button>
-        <button id="share-screen-btn" class="btn" type="button"></button>
-        <label class="quality" data-i18n-title="ctl.qualityTitle">
-          <select id="quality-select" class="select" data-i18n-aria="ctl.qualityAria">
-            <option value="auto" data-i18n="ctl.qAuto"></option>
-            <option value="alta" data-i18n="ctl.qAlta"></option>
-            <option value="media" data-i18n="ctl.qMedia"></option>
-            <option value="baixa" data-i18n="ctl.qBaixa"></option>
-          </select>
-        </label>
-        <button id="switch-screen-btn" class="btn hidden" type="button"></button>
-        <button id="screen-audio-btn" class="btn hidden" type="button"></button>
-        <button id="mini-btn" class="btn ghost hidden desktop-only" type="button" data-i18n-title="ctl.miniTitle">🗗</button>
+        <button id="toggle-mic-btn" class="btn ctl" type="button"></button>
+        <button id="share-screen-btn" class="btn ctl" type="button"></button>
         <div class="more-wrap">
-          <button id="more-btn" class="btn ghost" type="button" data-i18n-title="ctl.more" aria-haspopup="true" aria-expanded="false">⋯</button>
+          <button id="more-btn" class="btn ctl" type="button" data-i18n-title="ctl.more" aria-haspopup="true" aria-expanded="false">⋯</button>
           <div id="more-panel" class="more-panel hidden" role="menu">
-            <label class="more-row"><span data-i18n="ctl.micSelect"></span><select id="mic-select" class="select"></select></label>
+            <div id="self-label" class="more-head"></div>
+            <label class="more-row" id="mic-row"><span data-i18n="ctl.micSelect"></span><select id="mic-select" class="select"></select></label>
             <label class="more-row" id="output-row"><span data-i18n="ctl.outputSelect"></span><select id="output-select" class="select"></select></label>
-            <button id="noise-btn" class="btn" type="button" data-i18n-title="ctl.noiseTitle"></button>
+            <label class="more-row quality" id="quality-row" data-i18n-title="ctl.qualityTitle">
+              <span data-i18n="ctl.qualityAria"></span>
+              <select id="quality-select" class="select" data-i18n-aria="ctl.qualityAria">
+                <option value="auto" data-i18n="ctl.qAuto"></option>
+                <option value="alta" data-i18n="ctl.qAlta"></option>
+                <option value="media" data-i18n="ctl.qMedia"></option>
+                <option value="baixa" data-i18n="ctl.qBaixa"></option>
+              </select>
+            </label>
+            <button id="noise-btn" class="btn menu-item" type="button" data-i18n-title="ctl.noiseTitle"></button>
+            <button id="mini-btn" class="btn menu-item hidden" type="button" data-i18n="ctl.mini" data-i18n-title="ctl.miniTitle"></button>
             <div class="more-row lang-row">
               <span data-i18n="ctl.language"></span>
               <span class="lang-switch inline" role="group"><button type="button" data-lang="pt">PT</button><button type="button" data-lang="en">EN</button></span>
             </div>
-            <button id="diag-btn" class="btn ghost" type="button" data-i18n="ctl.diag"></button>
-            <button id="diag-copy-btn" class="btn ghost hidden" type="button" data-i18n="ctl.diagCopy"></button>
-            <button id="diag-save-btn" class="btn ghost hidden" type="button" data-i18n="ctl.diagSave"></button>
+            <div class="menu-sep"></div>
+            <button id="diag-copy-btn" class="btn menu-item" type="button" data-i18n="ctl.diagCopy"></button>
+            <button id="diag-btn" class="btn menu-item" type="button" data-i18n="ctl.diag"></button>
+            <button id="diag-save-btn" class="btn menu-item hidden" type="button" data-i18n="ctl.diagSave"></button>
           </div>
         </div>
-        <button id="leave-btn" class="btn danger" type="button" data-i18n="ctl.leave"></button>
+        <button id="leave-btn" class="btn danger ctl" type="button" data-i18n="ctl.leave"></button>
       </footer>
 
       <div id="self-pip" class="self-pip hidden" data-i18n-title="pip.title">
         <video muted autoplay playsinline></video>
+        <div class="pip-actions">
+          <button id="switch-screen-btn" class="pip-btn hidden" type="button"></button>
+          <button id="screen-audio-btn" class="pip-btn hidden" type="button"></button>
+        </div>
         <div class="pip-label">
           <span class="rec-dot"></span>
           <span class="pip-lines"><span id="pip-text"></span><span id="pip-quality"></span></span>
         </div>
       </div>
 
+      <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
       <div id="audio-sink" hidden></div>
     </section>
   </body>

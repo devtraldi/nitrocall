@@ -37,8 +37,9 @@ O projeto é e vai continuar sendo gratuito e aberto.
   de qualidade quando a internet de alguém não aguenta.
 - 📱 **Celular:** entra pelo navegador, ouve, fala, vê as telas em tela cheia e pode mostrar a
   **câmera** (traseira ou frontal).
-- 🔒 **Criptografia de ponta a ponta** (DTLS-SRTP, obrigatória no WebRTC), com código de
-  segurança por pessoa, no estilo do Signal, para conferir que ninguém está no meio.
+- 🔒 **Criptografia de ponta a ponta** (DTLS-SRTP, obrigatória no WebRTC), **verificada
+  sozinha**: cada lado assina o código de segurança da ligação com a chave da sala; um 🔒 ao
+  lado do nome quer dizer que ninguém está no meio, sem ninguém precisar ler códigos.
 - 🌉 **Nunca fica sem caminho.** O NitroCall tenta, nesta ordem:
   1. **direto** entre os dois aparelhos;
   2. **ponte por um amigo** da sala, escolhido automaticamente pela melhor conexão;
@@ -46,9 +47,13 @@ O projeto é e vai continuar sendo gratuito e aberto.
      ponte. A mídia continua cifrada: o TURN repassa pacotes que não consegue abrir.
 - 🎲 **Sem cadastro:** escolha um código de sala, e o app sorteia um nome engraçado para você
   ("Ás de Pijama", "Blefe Sem Wi-Fi"…). Pode trocar.
-- 🌎 **Português e inglês.**
-- 💻 Também existe como **app para Windows** (Tauri), com bandeja, atalho global para mutar e
-  atualização automática. O app e o site entram na mesma sala.
+- 🔗 **Convite com um toque:** toque no nome da sala para copiar o link; quem abre cai na sala
+  com tudo preenchido e só toca em "Entrar".
+- 🧭 **Quatro botões:** microfone, compartilhar, ⋯ e sair. O resto fica no menu ⋯ ou em cima
+  do que controla (os controles da tela ficam na sua própria prévia).
+- 🌎 **Português e inglês** (português por padrão; troca a qualquer momento).
+- 🌐 **Nada para instalar:** roda no navegador, no computador e no celular. Abriu o link,
+  entrou.
 
 ## Como funciona (sem jargão)
 

@@ -27,25 +27,28 @@ const server = new Turn({
 });
 server.start();
 
-http
+const httpServer = http
   .createServer((req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     if (req.method === "OPTIONS") {
       res.writeHead(204).end();
       return;
     }
-    if (req.url === "/turn") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
+    // /turn-slow: o Worker demora (rede móvel ruim): as primeiras ligações saem sem TURN.
+    if (req.url === "/turn" || req.url === "/turn-slow") {
+      const delay = req.url === "/turn-slow" ? 4000 : 0;
+      const body = JSON.stringify({
           iceServers: {
             urls: [`turn:${IP}:${TURN_PORT}?transport=udp`, `turn:${IP}:53?transport=udp`],
             username: USER,
             credential: PASS,
           },
           ttl: 3600,
-        }),
-      );
+        });
+      setTimeout(() => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(body);
+      }, delay);
       return;
     }
     if (req.url === "/health") {
@@ -55,3 +58,5 @@ http
     res.writeHead(500).end("fora do ar");
   })
   .listen(HTTP_PORT, "127.0.0.1", () => console.log(`turn ${IP}:${TURN_PORT} / http :${HTTP_PORT}`));
+// Mesmo serviço em ::1 (navegadores tentam "localhost" pelo IPv6 primeiro).
+http.createServer((req, res) => httpServer.emit("request", req, res)).listen(HTTP_PORT, "::1").on("error", () => {});

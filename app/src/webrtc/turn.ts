@@ -43,8 +43,18 @@ export class TurnCredentials {
   private renewAt = 0;
   private retryAt = 0;
   private inflight: Promise<void> | null = null;
+  private lastError = "";
+  private fetchedAt = 0;
+  // Chamado quando as credenciais chegam, mudam ou falham.
+  onChange: (() => void) | null = null;
 
   constructor(private readonly endpoint: string) {}
+
+  status(): { state: "off" | "pending" | "ok" | "error"; urls: number; error: string; ageS: number | null } {
+    const urls = this.servers.reduce((n, s) => n + (Array.isArray(s.urls) ? s.urls.length : 1), 0);
+    const state = !this.enabled ? "off" : this.servers.length ? "ok" : this.lastError ? "error" : "pending";
+    return { state, urls, error: this.lastError, ageS: this.fetchedAt ? Math.round((Date.now() - this.fetchedAt) / 1000) : null };
+  }
 
   get enabled(): boolean {
     return !!this.endpoint;
@@ -78,12 +88,16 @@ export class TurnCredentials {
       this.servers = servers;
       this.renewAt = Date.now() + ttl * 1000 * RENEW_AT;
       this.retryAt = 0;
-    } catch {
+      this.lastError = "";
+      this.fetchedAt = Date.now();
+    } catch (err) {
       // Sem TURN por enquanto: o app segue como antes (direto + ponte por amigo).
       this.retryAt = Date.now() + RETRY_MS;
       if (Date.now() >= this.renewAt) this.servers = [];
+      this.lastError = (err as Error)?.name === "AbortError" ? "sem resposta" : String((err as Error)?.message ?? err).slice(0, 80);
     } finally {
       clearTimeout(timer);
     }
+    this.onChange?.();
   }
 }

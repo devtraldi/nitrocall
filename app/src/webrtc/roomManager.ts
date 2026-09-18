@@ -68,6 +68,12 @@ const TICK_MS = 1000;
 // este tempo sem receber nada, o participante é dado como ausente e tudo é refeito.
 const PEER_STALE_MS = 12_000;
 const BOOT_CONNECT_TIMEOUT_MS = 8_000;
+// Ao entrar, espera as credenciais do TURN (no máximo isto) antes do primeiro contato: numa
+// rede móvel (CGNAT) o contato sem TURN falha e a próxima tentativa só viria segundos depois.
+const TURN_WAIT_MS = 3_000;
+// Vaga ocupada (o servidor recusou o nosso pedido dela) mas ainda sem caminho: mostramos
+// "procurando" por este tempo, a menos que o servidor diga que a vaga esvaziou.
+const OCCUPIED_SHOW_MS = 90_000;
 // Tempo para uma ligação própria (RTCPeerConnection) chegar a "connected" antes de ser
 // refeita.
 const PC_SETUP_TIMEOUT_MS = 15_000;
@@ -155,6 +161,56 @@ function slotFromPeerId(id: string): number {
 
 function validSlot(slot: unknown): slot is number {
   return typeof slot === "number" && Number.isInteger(slot) && slot >= 1 && slot <= MAX_SLOTS;
+}
+
+// Diagnóstico de ICE ao vivo: quando uma ligação falha, o navegador já a fechou e as
+// estatísticas vêm vazias. Guardamos, enquanto ela tenta, que caminhos cada lado ofereceu,
+// os erros de STUN/TURN e os estados — é o que explica por que um celular não conecta.
+interface IceTrace {
+  local: Record<string, number>;
+  remote: Record<string, number>;
+  errors: string[];
+  states: string[];
+  v6: boolean;
+}
+const iceTraces = new WeakMap<RTCPeerConnection, IceTrace>();
+
+function traceIce(pc: RTCPeerConnection | null | undefined): void {
+  if (!pc || iceTraces.has(pc)) return;
+  const tr: IceTrace = { local: {}, remote: {}, errors: [], states: [], v6: false };
+  iceTraces.set(pc, tr);
+  pc.addEventListener("icecandidate", (e) => {
+    const c = e.candidate;
+    if (!c?.candidate) return;
+    const type = c.type ?? /typ (\w+)/.exec(c.candidate)?.[1] ?? "?";
+    tr.local[type] = (tr.local[type] ?? 0) + 1;
+    if ((c.address ?? "").includes(":")) tr.v6 = true;
+  });
+  pc.addEventListener("icecandidateerror", (e) => {
+    const ev = e as RTCPeerConnectionIceErrorEvent;
+    const where = ev.url ? `@${ev.url.split("?")[0]}` : "";
+    const item = `${ev.errorCode}${where}`;
+    if (tr.errors.length < 6 && !tr.errors.includes(item)) tr.errors.push(item);
+  });
+  pc.addEventListener("iceconnectionstatechange", () => {
+    if (tr.states.length < 8) tr.states.push(pc.iceConnectionState);
+  });
+  const add = pc.addIceCandidate.bind(pc);
+  pc.addIceCandidate = ((cand?: RTCIceCandidateInit | null) => {
+    const type = cand?.candidate ? /typ (\w+)/.exec(cand.candidate)?.[1] : undefined;
+    if (type) tr.remote[type] = (tr.remote[type] ?? 0) + 1;
+    return add(cand as RTCIceCandidateInit);
+  }) as typeof pc.addIceCandidate;
+}
+
+function iceSummary(pc: RTCPeerConnection): string | null {
+  const tr = iceTraces.get(pc);
+  if (!tr) return null;
+  const count = (m: Record<string, number>) => ["host", "srflx", "prflx", "relay"].map((k) => `${k} ${m[k] ?? 0}`).join(", ");
+  return (
+    `estados: ${tr.states.join(">") || pc.iceConnectionState}; locais: ${count(tr.local)}${tr.v6 ? ", IPv6" : ""}; ` +
+    `remotos: ${count(tr.remote)}${tr.errors.length ? `; erros: ${tr.errors.join(" ")}` : ""}`
+  );
 }
 
 function directBlocked(slot: number): boolean {
@@ -300,6 +356,10 @@ interface StateMsg {
   kind?: "app" | "web";
   // A pessoa saiu da aba/app (celular): o sistema pode cortar o microfone dela. (6.0+)
   bg?: boolean;
+  // Verificação automática do código de segurança (6.1): assinatura, com a chave da sala,
+  // do código DTLS que o remetente vê nesta ligação. Se alguém estiver no meio, os códigos
+  // dos dois lados diferem e ele não consegue forjar a assinatura sem a chave da sala.
+  sv?: string;
   // Envio da nossa tela para o destinatário (painel ℹ️ dele): codec, encoder, hardware,
   // largura, fps, QP e limitação.
   stx?: { codec: string; enc: string; hw: boolean; w: number | null; fps: number | null; qp: number | null; lim: string | null };
@@ -438,6 +498,8 @@ export interface PeerView {
   hearsYou: boolean;
   seesYourScreen: boolean;
   presence: "direct" | "relay" | "searching";
+  // Ainda não sabemos o nome (vaga ocupada, sem contato): a UI mostra "Alguém".
+  unnamed: boolean;
   via: number | null;
   viaName: string | null;
   // A tela desta pessoa chega por um distribuidor (árvore), e quem é.
@@ -453,6 +515,10 @@ export interface PeerView {
   rttMs: number | null;
   lossPct: number | null;
   jitterMs: number | null;
+  // Verificação automática: "ok" = os dois lados veem o mesmo código (ninguém no meio);
+  // "mismatch" = diferentes (alguém pode estar no meio); "pending" = ainda verificando;
+  // null = sem ligação própria (chega por ponte).
+  verified: "ok" | "mismatch" | "pending" | null;
   // Igual nos dois lados quando ninguém está no meio da ligação (compare em voz).
   securityCode: string | null;
   // Versão/build/forma de entrega que a pessoa anunciou (null = não anunciou, ex.: 4.0.0).
@@ -495,6 +561,8 @@ export interface ShareStatus {
 
 export interface RoomCallbacks {
   onStatus(message: string): void;
+  // Alguém na sala usa outra senha (ou versão incompatível): ninguém se ouve até corrigir.
+  onAuthMismatch?(slot: number): void;
   onSelf(slot: number, id: string): void;
   onBrokerState(state: BrokerState): void;
   onPeerUpdate(view: PeerView): void;
@@ -603,7 +671,9 @@ interface RemotePeer {
   slot: number;
   boot: DataConnection | null;
   bootOpenAt: number;
-  pendingBoot: { conn: DataConnection; at: number } | null;
+  pendingBoot: { conn: DataConnection; at: number; turn: boolean } | null;
+  // Quando soubemos que a vaga está ocupada (ao procurar a nossa), 0 = não sabemos.
+  occupiedAt: number;
   state: StateMsg | null;
   lastSeenAt: number;
   everPresent: boolean;
@@ -724,6 +794,9 @@ export class RoomManager {
   private lastSelfHealthKey = "";
   private screen: { stream: MediaStream; gen: number } | null = null;
   private screenIsCamera = false;
+  private turnSettled = false;
+  private turnGateUntil = 0;
+  private turnLogged = "";
   private background = false;
   private screenGen = 0;
   private screenQuality: ScreenQuality = "auto";
@@ -778,6 +851,17 @@ export class RoomManager {
     void probeHwEncoders().catch(() => null);
   }
 
+  private securityMac(code: string): string {
+    return sha256Hex(`${this.authKey}|sec|${code}`).slice(0, 24);
+  }
+
+  private verification(p: RemotePeer): PeerView["verified"] {
+    const c = p.conn;
+    if (!c || !this.usable(c)) return null;
+    if (!c.securityCode || !p.state?.sv) return "pending";
+    return p.state.sv === this.securityMac(c.securityCode) ? "ok" : "mismatch";
+  }
+
   private authFor(from: number, to: number): string {
     return sha256Hex(`${this.authKey}|${from}>${to}`).slice(0, 24);
   }
@@ -788,8 +872,14 @@ export class RoomManager {
 
   join(): void {
     this.left = false;
-    // Credenciais em paralelo com a entrada: não atrasam nada; quem vier depois já as tem.
-    void this.turn.refresh();
+    // Credenciais em paralelo com o servidor de sinalização; os contatos esperam por elas
+    // até TURN_WAIT_MS (ver reconcileBoot).
+    this.turnGateUntil = Date.now() + TURN_WAIT_MS;
+    this.turn.onChange = () => this.onTurnChange();
+    void this.turn.refresh().finally(() => {
+      this.turnSettled = true;
+      this.kick();
+    });
     this.callbacks.onBrokerState("connecting");
     window.addEventListener("online", this.onOnline);
     this.startNostr();
@@ -956,6 +1046,8 @@ export class RoomManager {
           videoCodec: c.videoCodec,
           securityCode: c.securityCode,
           dtls: c.dtls,
+          ice: iceSummary(c.pc),
+          viaTurn: !!c.viaTurn,
           micFmtp: /a=fmtp:\d+ ([^\r\n]*maxaveragebitrate[^\r\n]*)/.exec(c.pc.remoteDescription?.sdp ?? "")?.[1] ?? null,
         });
         if (p.state?.screen.active) links.push({ slot: p.slot, name: "screenIn", state: c.pc.connectionState });
@@ -995,6 +1087,7 @@ export class RoomManager {
       hwEncoders: hwEncoders(),
       codecSkip: [...this.codecSkip],
       cpuLoad: this.cpuLoad,
+      turn: this.turn.status(),
       peerApps: [...this.peers.values()].map((p) => ({ slot: p.slot, ver: p.state?.ver ?? null, build: p.state?.build ?? null, kind: p.state?.kind ?? null })),
       cap: this.cap,
       capMax: this.capMax,
@@ -1114,6 +1207,7 @@ export class RoomManager {
         return;
       }
       const p = this.getPeer(slotFrom);
+      traceIce(conn.peerConnection as RTCPeerConnection | null);
       conn.on("open", () => {
         if (this.left || this.peer !== candidate) {
           conn.close();
@@ -1161,6 +1255,8 @@ export class RoomManager {
             this.ensureBrokerReconnect(candidate);
           } else if (this.mySlot === -1) {
             candidate.destroy();
+            // Alguém está nesta vaga: mesmo antes de conseguirmos contato, a sala não está vazia.
+            this.getPeer(slot).occupiedAt = Date.now();
             this.claimSlot(slot + 1);
           } else {
             // Reabrindo a nossa própria vaga depois de um "close": o servidor ainda a
@@ -1711,7 +1807,8 @@ export class RoomManager {
     const reach = new Map<number, Set<number>>();
     const mine = new Set<number>();
     for (const p of this.peers.values()) {
-      const known = this.present(p) || !!p.state || this.gossipName(p.slot) !== null;
+      const occupied = p.occupiedAt > 0 && now - p.occupiedAt < OCCUPIED_SHOW_MS;
+      const known = this.present(p) || !!p.state || this.gossipName(p.slot) !== null || occupied;
       if (!known) {
         p.knownSince = 0;
         continue;
@@ -1831,6 +1928,7 @@ export class RoomManager {
         boot: null,
         bootOpenAt: 0,
         pendingBoot: null,
+        occupiedAt: 0,
         state: null,
         lastSeenAt: 0,
         everPresent: false,
@@ -1950,6 +2048,7 @@ export class RoomManager {
     // Com o canal próprio aberto o servidor não é mais necessário para este par.
     if (this.ctrlOpen(p)) return;
     if (!brokerReady || now < p.nextBootAt) return;
+    if (this.turn.enabled && !this.turnSettled && now < this.turnGateUntil) return;
     if (!p.firstBootAt) p.firstBootAt = now;
     if (bootBlocked(p.slot)) {
       p.nextBootAt = now + EMPTY_SLOT_POLL_MS;
@@ -1968,7 +2067,8 @@ export class RoomManager {
       p.nextBootAt = now + LOST_PEER_RETRY_MS;
       return;
     }
-    p.pendingBoot = { conn, at: now };
+    p.pendingBoot = { conn, at: now, turn: this.turn.current().length > 0 };
+    traceIce(conn.peerConnection as RTCPeerConnection | null);
     conn.on("open", () => {
       if (p.pendingBoot?.conn === conn) p.pendingBoot = null;
       if (this.left || this.ignoredConns.has(conn)) {
@@ -1986,6 +2086,9 @@ export class RoomManager {
 
   private failPendingBoot(p: RemotePeer, now: number): void {
     if (p.pendingBoot) {
+      const pc = p.pendingBoot.conn.peerConnection as RTCPeerConnection | null;
+      // Só para quem sabemos que está na sala (vaga vazia não é falha).
+      if (pc && (p.occupiedAt || p.everPresent)) void this.logIceFailure(`contato com ${this.peerName(p)}`, pc, p.pendingBoot.turn);
       this.ignoredConns.add(p.pendingBoot.conn);
       p.pendingBoot.conn.close();
       p.pendingBoot = null;
@@ -1996,9 +2099,68 @@ export class RoomManager {
     p.nextBootAt = now + delay + Math.random() * 500;
   }
 
+  // Credenciais TURN chegaram (ou foram renovadas): quem ainda não tem caminho tenta de novo
+  // já, agora com o TURN, em vez de esperar o próximo intervalo.
+  private onTurnChange(): void {
+    const st = this.turn.status();
+    const line = st.state === "ok" ? `TURN: credenciais prontas (${st.urls} endereços).` : `TURN: sem credenciais (${st.error || st.state}).`;
+    if (line !== this.turnLogged) {
+      this.turnLogged = line;
+      this.callbacks.onStatus(line);
+    }
+    if (st.state !== "ok" || this.left) return;
+    const now = Date.now();
+    for (const p of this.peers.values()) {
+      if (this.present(p)) continue;
+      if (p.pendingBoot && !p.pendingBoot.turn) {
+        this.ignoredConns.add(p.pendingBoot.conn);
+        p.pendingBoot.conn.close();
+        p.pendingBoot = null;
+      }
+      if (p.occupiedAt || p.everPresent || p.bootFailures > 0) {
+        p.nextBootAt = now;
+        p.bootFailures = 0;
+      }
+    }
+    this.kick();
+  }
+
+  // Resumo do ICE de uma ligação que não fechou: que caminhos cada lado ofereceu, erros de
+  // STUN/TURN e se havia TURN. É o que diz, pelo diagnóstico, por que um celular não liga.
+  private async logIceFailure(what: string, pc: RTCPeerConnection, hadTurn: boolean): Promise<void> {
+    const live = iceSummary(pc);
+    if (live) {
+      this.callbacks.onStatus(`ICE: ${what} não fechou (${live}; TURN ${hadTurn ? "sim" : "não"}).`);
+      return;
+    }
+    try {
+      const count = (m: Map<string, number>) => ["host", "srflx", "prflx", "relay"].map((k) => `${k} ${m.get(k) ?? 0}`).join(", ");
+      const local = new Map<string, number>();
+      const remote = new Map<string, number>();
+      let pairs = 0;
+      let v6 = false;
+      const report = await pc.getStats();
+      report.forEach((st: Record<string, unknown>) => {
+        const type = String(st.candidateType ?? "");
+        if (st.type === "local-candidate") {
+          local.set(type, (local.get(type) ?? 0) + 1);
+          if (String(st.address ?? st.ip ?? "").includes(":")) v6 = true;
+        } else if (st.type === "remote-candidate") remote.set(type, (remote.get(type) ?? 0) + 1);
+        else if (st.type === "candidate-pair") pairs += 1;
+      });
+      this.callbacks.onStatus(
+        `ICE: ${what} não fechou (${pc.iceConnectionState}/${pc.iceGatheringState}; locais: ${count(local)}${v6 ? ", IPv6" : ""}; ` +
+          `remotos: ${count(remote)}; pares ${pairs}; TURN ${hadTurn ? "sim" : "não"}).`,
+      );
+    } catch {
+      /* ligação já fechada */
+    }
+  }
+
   private handlePeerUnavailable(slot: number): void {
     const p = this.peers.get(slot);
     if (!p) return;
+    p.occupiedAt = 0;
     if (p.pendingBoot) this.failPendingBoot(p, Date.now());
   }
 
@@ -2044,6 +2206,7 @@ export class RoomManager {
   }
 
   private onDirectOpen(p: RemotePeer, how: "boot" | "ctrl"): void {
+    p.occupiedAt = 0;
     const first = !p.everPresent;
     p.everPresent = true;
     if (how === "ctrl" && p.via) {
@@ -2062,6 +2225,7 @@ export class RoomManager {
 
   private newConn(gen: number, offerer: boolean, now: number): Conn {
     const pc = new RTCPeerConnection({ iceServers: this.iceServers() });
+    traceIce(pc);
     return {
       gen,
       pc,
@@ -2192,7 +2356,8 @@ export class RoomManager {
       const params = sender.getParameters() as RTCRtpSendParameters & { degradationPreference?: RTCDegradationPreference };
       if (!params.encodings?.length) return;
       const cap = this.relayOrLevelCap(c);
-      params.degradationPreference = screenDegradation();
+      // Câmera (celular, rede móvel): cai a resolução antes do fps; tela: mantém a nitidez.
+      params.degradationPreference = this.screenIsCamera ? "balanced" : screenDegradation();
       for (const enc of params.encodings as (RTCRtpEncodingParameters & { codec?: RTCRtpCodec })[]) {
         if (cap === null) delete enc.maxBitrate;
         else enc.maxBitrate = cap;
@@ -2677,6 +2842,7 @@ export class RoomManager {
       capMax: this.capMax,
       screenVia: this.screenViaFor(p),
       auth: this.authFor(this.mySlot, p.slot),
+      ...(p.conn && this.usable(p.conn) && p.conn.securityCode ? { sv: this.securityMac(p.conn.securityCode) } : {}),
       ver: VERSION,
       build: BUILD,
       kind: TARGET,
@@ -2872,6 +3038,7 @@ export class RoomManager {
           build: typeof m.build === "string" ? m.build.slice(0, 16) : undefined,
           kind: m.kind === "web" ? "web" : m.kind === "app" ? "app" : undefined,
           bg: m.bg === true,
+          sv: typeof m.sv === "string" ? m.sv.slice(0, 32) : undefined,
           stx:
             m.stx && typeof m.stx === "object"
               ? {
@@ -2937,6 +3104,7 @@ export class RoomManager {
   private rejectPeer(p: RemotePeer, now: number): void {
     if (now - p.authBadAt > 60_000) {
       this.callbacks.onStatus(`Participante ${p.slot} recusado: senha da sala diferente (ou versão antiga do NitroCall).`);
+      this.callbacks.onAuthMismatch?.(p.slot);
     }
     p.authBadAt = now;
     p.authed = false;
@@ -3466,6 +3634,7 @@ export class RoomManager {
     if (this.directOpen(p)) presence = "direct";
     else if (p.via) presence = "relay";
     else if (this.gossipName(p.slot) !== null) presence = "searching";
+    else if (p.occupiedAt && now - p.occupiedAt < OCCUPIED_SHOW_MS && now - p.authBadAt > 60_000) presence = "searching";
     else {
       if (p.lastView) {
         p.lastView = "";
@@ -3500,6 +3669,7 @@ export class RoomManager {
       hearsYou: p.state?.hears ?? false,
       seesYourScreen: p.state?.sees ?? false,
       presence,
+      unnamed: !p.state?.name && this.gossipName(p.slot) === null,
       via: presence === "relay" ? p.via : null,
       viaName: presence === "relay" && bridge ? this.peerName(bridge) : null,
       screenVia: screenVia || null,
@@ -3513,6 +3683,7 @@ export class RoomManager {
       lossPct: c?.lossPct ?? null,
       jitterMs: c?.jitterMs ?? null,
       securityCode: p.conn && this.usable(p.conn) ? p.conn.securityCode : null,
+      verified: this.verification(p),
       app: p.state?.ver ? { ver: p.state.ver, build: p.state.build ?? "", kind: p.state.kind ?? "app" } : null,
     };
     const key = JSON.stringify(view);

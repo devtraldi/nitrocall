@@ -157,9 +157,9 @@ export function parseInvite(url: string): string | null {
   }
 }
 
-export function inviteLink(roomCode: string): string {
-  return `nitrocall://sala/${encodeURIComponent(roomCode.trim())}`;
-}
+// Site público: o link da sala sempre aponta para cá (quem recebe não precisa de nada
+// instalado). Uma cópia publicada em outro endereço usa o próprio endereço.
+export const SITE_URL = "https://devtraldi.github.io/nitrocall/";
 
 // Convite pelo navegador: o código vai depois do "#", que nunca sai do PC (nem para o
 // site, na versão online). Aceita #sala=<código> e #c=<código>.
@@ -173,11 +173,11 @@ export function parseHashInvite(hash: string): string | null {
   }
 }
 
-// Endereço desta página com o código da sala (só faz sentido online: num arquivo local o
-// caminho é diferente em cada PC).
-export function webInviteLink(roomCode: string): string | null {
-  if (location.protocol !== "https:") return null;
-  return `${location.origin}${location.pathname}#sala=${encodeURIComponent(roomCode.trim())}`;
+// Link da sala: o site (este, se a página estiver online; senão o público) + #sala=<código>.
+// O "#" nunca é enviado ao servidor do site.
+export function roomLink(roomCode: string): string {
+  const base = location.protocol === "https:" && !isTauri() ? `${location.origin}${location.pathname}` : SITE_URL;
+  return `${base}#sala=${encodeURIComponent(roomCode.trim())}`;
 }
 
 // Chromium (Chrome, Edge, Opera, Brave) é o único navegador em que tudo foi testado: som

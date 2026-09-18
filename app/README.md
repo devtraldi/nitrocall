@@ -4,13 +4,34 @@ Voice and screen sharing among friends, device to device, end-to-end encrypted. 
 no media server, no telemetry, free and open source. Designed for 2 to 8 people (9–10
 experimental). Overview, limits and third-party transparency: [repository README](../README.md).
 
-Two ways to use it, same code and same protocol (they join the same rooms and talk):
+The product is the **web version**: a single file (~2.4 MB), `NitroCall.html`, published at
+<https://devtraldi.github.io/nitrocall/> (it also runs by double-clicking it in Chrome/Edge).
+It works on desktop and phones, with nothing to install.
 
-- **Desktop app** (Windows; also builds for macOS/Linux) built with Tauri 2 + TypeScript.
-  All communication uses Chromium's WebRTC (WebView2); Rust only handles the shell (tray,
-  anti-sleep, CPU load, file logging, auto-update).
-- **NitroCall.html**: a single file (~2.4 MB), published at
-  <https://devtraldi.github.io/nitrocall/> and also runnable by double-clicking it in Chrome/Edge.
+The source also keeps an **optional desktop shell** (Tauri 2, `src-tauri/`) that wraps the same
+code — tray, anti-sleep, CPU load, file logging, auto-update. It speaks the same protocol, but
+it isn't built or distributed; the sections about it below are for anyone who wants to.
+
+## What's new in 6.1
+
+- **Phones on mobile data connect reliably.** The first contact now waits (up to 3 s) for TURN
+  credentials instead of racing them; if they arrive later, every pending attempt is retried
+  immediately with TURN (was: next attempt 5–13 s later). A slot known to be taken shows up as
+  "Someone in the room — connecting…" instead of "Just you", and after 25 s a notice points to
+  ⋯ → Copy diagnostics. Failed ICE attempts log what each side offered (host/srflx/relay,
+  IPv6, TURN or not) so a phone's diagnostics say exactly why it didn't connect.
+- **Automatic security verification:** each side sends `HMAC(room key, DTLS security code)`
+  over the gossip channel; matching codes = 🔒 on the chip; different codes (someone in the
+  middle) = ⚠️. As strong as the room code/password.
+- **Four-button bar** (mic, share, ⋯, leave); screen controls moved onto the self preview;
+  quality, devices, noise, language and diagnostics in the ⋯ menu. Tapping a person opens a
+  panel with verification, path (direct/bridge/TURN), latency and their volume (touch-friendly).
+- **Room link:** tapping the room name copies `https://devtraldi.github.io/nitrocall/#sala=<code>`
+  (always the public site, even from the app or a local file) with visible confirmation. The
+  separate invite button is gone.
+- Portuguese by default; iPhone "tap to hear" fallback if the browser blocks playback; a
+  password mismatch now shows a notice on both sides.
+- `tests/ux.mjs`: 46-step UX walkthrough in installed Chrome (desktop + emulated iPhone).
 
 ## What's new in 6.0
 
@@ -83,6 +104,7 @@ ONLY=v6 npm run test:e2e         # phone (camera, "left the tab", mic restart), 
 TURN_ALL=1 npm run test:e2e      # every scenario with TURN credentials available
 TURN_URL=https://… npm run test:e2e   # use a real credentials Worker instead of the local TURN
 node tests/shots.mjs <dir>       # UI screenshots on iPhone SE, Pixel 7 and desktop (LANG_UI=en)
+node tests/ux.mjs                # UX walkthrough in installed Chrome, desktop + iPhone (HEADLESS=1)
 ```
 
 "Direct path impossible" is simulated for real at the ICE level: every `RTCPeerConnection` in
@@ -216,9 +238,10 @@ now made by the app **before the first frame**:
   WebRTC). The 🔒 pill turns on when every link is like that. Honest caveat: when a friend
   bridges, that hop goes through their device, which decodes and re-encodes — a friend in the
   room, not a third-party server. Through TURN, packets stay encrypted end to end.
-- **Per-pair security code** (click a friend's chip): derived from both sides' DTLS
-  fingerprints. If both read the same code, nobody is in the middle (not even a malicious
-  signaling server).
+- **Automatic verification** (6.1): each side derives a security code from both DTLS
+  fingerprints and sends an HMAC of it keyed with the room key. Same code on both sides → 🔒 on
+  the chip; different (someone in the middle, e.g. a malicious signaling server) → ⚠️. An
+  attacker would need the room code and password to forge it.
 - **Room password** (optional): anyone without it is rejected before any media.
 - One-click strong room code (🎲, ~60 bits). Strict CSP, minimal permissions, no telemetry,
   no recording. Versions 3.x and 4.x+ don't mix (different protocol).

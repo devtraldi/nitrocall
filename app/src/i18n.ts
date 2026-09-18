@@ -1,6 +1,6 @@
 // PT/EN. Um dicionário só, com as duas línguas lado a lado, para nunca ficarem fora de
-// sincronia. {x} = variável. O registro técnico (🩺) fica em português: é para quem
-// cuida do app diagnosticar.
+// sincronia. {x} = variável. Português por padrão; a escolha fica guardada. O registro
+// técnico (🩺) fica em português: é para quem cuida do app diagnosticar.
 
 export type Lang = "pt" | "en";
 
@@ -36,10 +36,21 @@ const M = {
   "build.app": ["app", "app"],
 
   // Cabeçalho da chamada
-  "call.copyRoom": ["Copiar o código da sala", "Copy the room code"],
-  "call.invite": ["Convite", "Invite"],
-  "call.inviteTitle": ["Copiar um convite para mandar aos amigos", "Copy an invite to send to friends"],
+  "call.copyLinkTitle": ["Copiar o link da sala para mandar aos amigos", "Copy the room link to send to friends"],
+  "call.linkCopied": ["✓ Link copiado", "✓ Link copied"],
+  "call.linkCopiedToast": ["Link da sala copiado. Cole no WhatsApp para os amigos entrarem direto.", "Room link copied. Paste it to your friends so they can join right away."],
+  "call.tapAudio": ["🔊 Toque para ouvir a chamada", "🔊 Tap to hear the call"],
+  "notice.auth": [
+    "Alguém tentou entrar com outra senha (ou uma versão muito antiga). Confiram a senha em \"Opções\" ao entrar.",
+    "Someone tried to join with a different password (or a very old version). Check the password under \"Options\" when joining.",
+  ],
+  "notice.unreachable": [
+    "Tem alguém na sala, mas ainda não consegui conectar. Continuo tentando; se demorar, use ⋯ → Copiar diagnóstico.",
+    "Someone is in the room but I couldn't connect yet. Still trying; if it takes long, use ⋯ → Copy diagnostics.",
+  ],
   "call.youAre": ["você é {name}", "you are {name}"],
+  "chip.someone": ["Alguém na sala", "Someone in the room"],
+  "chip.connecting": ["conectando…", "connecting…"],
   "call.youAreSlot": ["você é {name} · participante {slot}", "you are {name} · participant {slot}"],
   "broker.connecting": ["Conectando…", "Connecting…"],
   "broker.connected": ["Online", "Online"],
@@ -118,13 +129,29 @@ const M = {
   "q.boa": ["boa", "good"],
   "q.fraca": ["fraca", "weak"],
   "q.ruim": ["ruim", "bad"],
-  "sec.title": ["Código de segurança com {name}", "Security code with {name}"],
-  "sec.hint": [
-    "Peça a {name} para tocar no seu nome e ler o código. Se for igual, ninguém está no meio da ligação de vocês.",
-    "Ask {name} to tap your name and read the code. If it matches, nobody is in the middle of your call.",
+  "panel.ok": ["🔒 Conexão verificada: criptografada de ponta a ponta, ninguém no meio.", "🔒 Verified connection: end-to-end encrypted, nobody in the middle."],
+  "panel.mismatch": [
+    "⚠️ A verificação falhou: alguém pode estar no meio desta ligação. Saiam e entrem de novo; se continuar, usem uma senha na sala.",
+    "⚠️ Verification failed: someone may be in the middle of this link. Leave and rejoin; if it persists, use a room password.",
   ],
-  "sec.pendingTitle": ["Código de segurança", "Security code"],
-  "sec.pending": ["Aparece quando a ligação direta com {name} estiver de pé.", "Shows up once the direct link with {name} is up."],
+  "panel.pending": ["⏳ Verificando a conexão…", "⏳ Verifying the connection…"],
+  "panel.bridge": [
+    "🌉 Chega por {via}: o áudio passa pelo aparelho dele(a) (um amigo da sala), que decodifica e recodifica.",
+    "🌉 Comes through {via}: audio passes through their device (a friend in the room), which decodes and re-encodes.",
+  ],
+  "panel.searching": ["⏳ Ainda sem caminho até esta pessoa; tentando direto, por um amigo e pelo TURN.", "⏳ No path to this person yet; trying direct, via a friend and via TURN."],
+  "panel.direct": ["Caminho: direto", "Path: direct"],
+  "panel.turn": ["Caminho: TURN (repasse cifrado; o TURN não vê nem ouve nada)", "Path: TURN (encrypted relay; TURN can't see or hear anything)"],
+  "panel.viaPath": ["Caminho: pela ponte ({via})", "Path: through a bridge ({via})"],
+  "panel.latency": ["Latência {rtt} ms{loss}", "Latency {rtt} ms{loss}"],
+  "panel.volume": ["Volume (só pra você)", "Volume (just for you)"],
+  "panel.note": [
+    "A verificação é tão forte quanto o código da sala: com um código difícil (🎲) ou uma senha, ninguém consegue se passar pelos seus amigos.",
+    "Verification is as strong as the room code: with a hard code (🎲) or a password, nobody can impersonate your friends.",
+  ],
+  "chip.verified": ["Conexão verificada", "Verified connection"],
+  "chip.mismatch": ["Verificação falhou", "Verification failed"],
+  "secure.warn": ["⚠️ Verificação falhou com alguém: toque no nome da pessoa.", "⚠️ Verification failed with someone: tap their name."],
   "bridge.banner": [
     "🌉 Seu aparelho é a ponte entre {list} (eles não conseguem se ligar direto). Usa um pouco mais da sua internet; se outro amigo tiver condições melhores, a ponte muda sozinha.",
     "🌉 Your device is bridging {list} (they can't connect directly). It uses a bit more of your internet; if a friend has a better setup, the bridge moves automatically.",
@@ -178,7 +205,7 @@ const M = {
   "ctl.qAlta": ["Alta (1080p)", "High (1080p)"],
   "ctl.qMedia": ["Média (720p)", "Medium (720p)"],
   "ctl.qBaixa": ["Baixa (480p)", "Low (480p)"],
-  "ctl.diag": ["🩺 Registro técnico", "🩺 Technical log"],
+  "ctl.diag": ["🩺 Ver registro técnico", "🩺 Show technical log"],
   "ctl.diagCopy": ["📋 Copiar diagnóstico", "📋 Copy diagnostics"],
   "ctl.diagSave": ["📥 Baixar registro", "📥 Download log"],
   "ctl.mini": ["🗗 Mini-janela", "🗗 Mini window"],
@@ -222,12 +249,6 @@ const M = {
 
   // Mensagens (aparecem no registro)
   "msg.joining": ["Entrando na sala \"{room}\" como {name}...", "Joining room \"{room}\" as {name}..."],
-  "msg.inviteText": ["Entra na minha sala do NitroCall: código \"{code}\"", "Join my NitroCall room: code \"{code}\""],
-  "msg.inviteApp": ["Se já tiver o app: {link}", "If you have the app: {link}"],
-  "msg.inviteLink": ["Abra no navegador: {link}", "Open in your browser: {link}"],
-  "msg.inviteFile": ["Abra o NitroCall.html no Chrome ou no Edge (ou o app) e use esse código.", "Open NitroCall.html in Chrome or Edge (or the app) and use this code."],
-  "msg.inviteCopied": ["Convite copiado; cole no WhatsApp para os amigos.", "Invite copied; paste it to your friends."],
-  "msg.inviteShared": ["Convite enviado.", "Invite shared."],
   "msg.copyFail": ["Não consegui copiar.", "Couldn't copy."],
   "msg.codeCopied": ["Código \"{code}\" copiado.", "Code \"{code}\" copied."],
   "msg.diagCopied": ["Diagnóstico copiado; cole numa mensagem para quem cuida do app.", "Diagnostics copied; paste it in a message to whoever maintains the app."],
@@ -264,7 +285,7 @@ function detect(): Lang {
   } catch {
     /* sem armazenamento */
   }
-  return (navigator.language || "pt").toLowerCase().startsWith("pt") ? "pt" : "en";
+  return "pt";
 }
 
 let lang: Lang = detect();

@@ -14,6 +14,13 @@ import { pathToFileURL } from "node:url";
 
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+
+// A qualidade fica no menu "⋯": abre o menu, escolhe e fecha (como a pessoa faria).
+async function pickQuality(page, value) {
+  await page.click("#more-btn");
+  await page.selectOption("#quality-select", value);
+  await page.keyboard.press("Escape");
+}
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/[\\/]$/, "");
 const HERE = fileURLToPath(new URL(".", import.meta.url)).replace(/[\\/]$/, "");
 // Quadros de exemplo (recebido/referência) para olhar: pasta temporária por padrão.
@@ -97,7 +104,7 @@ await vtab.waitForFunction(() => window.__ready === true);
 const dims = await vtab.evaluate(() => window.__dims);
 await sleep(4000);
 await sender.page.bringToFront();
-await sender.page.selectOption("#quality-select", E.QUALITY || "alta");
+await pickQuality(sender.page, E.QUALITY || "alta");
 await sender.page.click("#share-screen-btn");
 await sleep(1500);
 await vtab.bringToFront();

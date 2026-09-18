@@ -1248,9 +1248,7 @@ body.mini-body {
     padding-top: max(0.45rem, env(safe-area-inset-top));
   }
 
-  .brand-name,
-  .self-label,
-  #invite-btn .lbl {
+  .brand-name {
     display: none;
   }
 
@@ -1258,18 +1256,7 @@ body.mini-body {
     gap: 0.35rem;
   }
 
-  .room-code {
-    min-width: 0;
-    max-width: 38vw;
-    overflow: hidden;
-  }
 
-  #room-code-text {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-  }
 
   .pills {
     gap: 0.3rem;
@@ -1297,9 +1284,7 @@ body.mini-body {
     padding-right: 0;
   }
 
-  .pill-connected {
-    display: none;
-  }
+
 
   .participants {
     flex-wrap: nowrap;
@@ -1404,18 +1389,14 @@ body.mini-body {
     padding: 0.6em 0.8em;
   }
 
-  .controls .quality {
-    display: none;
-  }
+
 
   /* Barra do celular: só ícones nos botões principais (cabe numa linha). */
   .controls {
     flex-wrap: nowrap;
   }
 
-  #toggle-mic-btn .lbl,
-  #switch-screen-btn .lbl,
-  body.sharing #share-screen-btn .lbl {
+  #toggle-mic-btn .lbl {
     display: none;
   }
 
@@ -1453,4 +1434,304 @@ body.mini-body {
     max-height: 30dvh;
     padding: 0.4rem 0.6rem;
   }
+}
+
+/* ----------------------------------------------------------------------------
+   6.1: barra de 4 botões, link da sala, prévia com controles, avisos
+   ------------------------------------------------------------------------- */
+
+.topbar {
+  gap: 0.8rem;
+}
+
+/* Link da sala: um toque copia o endereço completo; o próprio botão confirma. */
+.room-link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+  min-width: 0;
+  max-width: 46vw;
+  font: inherit;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.3em 0.85em 0.3em 0.7em;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.room-link:hover {
+  border-color: var(--accent);
+}
+
+#room-code-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.copy-feedback:empty {
+  display: none;
+}
+
+.copy-feedback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.95);
+  color: #04130a;
+  font-weight: 700;
+  white-space: nowrap;
+  animation: pop 0.18s ease-out;
+}
+
+@keyframes pop {
+  from {
+    transform: scale(0.92);
+    opacity: 0;
+  }
+}
+
+.pills {
+  margin-left: auto;
+}
+
+/* "Online" é o normal: só aparece quando há problema com o servidor de sinalização. */
+.pill-connected {
+  display: none;
+}
+
+.pill-secure {
+  min-width: 1.9em;
+  text-align: center;
+}
+
+/* Aviso curto no topo */
+.toast {
+  position: fixed;
+  top: 0.8rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  max-width: min(92vw, 520px);
+  padding: 0.6rem 1rem;
+  border-radius: 12px;
+  background: #0f2a1a;
+  border: 1px solid rgba(34, 197, 94, 0.6);
+  color: #bbf7d0;
+  font-size: 0.9rem;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+  animation: pop 0.18s ease-out;
+}
+
+.notice-banner {
+  background: rgba(234, 179, 8, 0.12);
+  border-color: rgba(234, 179, 8, 0.45);
+  color: #fde68a;
+}
+
+.tap-audio {
+  margin: 0.5rem auto 0;
+  display: block;
+  font: inherit;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(120deg, var(--accent-2), var(--accent));
+  border: 0;
+  border-radius: 999px;
+  padding: 0.65em 1.4em;
+  cursor: pointer;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+/* Barra de controles: 4 botões grandes, iguais no PC e no celular */
+.controls {
+  gap: 0.6rem;
+}
+
+.controls .ctl {
+  min-width: 3.2rem;
+}
+
+#more-btn {
+  font-size: 1.2rem;
+  line-height: 1;
+  padding: 0.45em 0.9em;
+}
+
+/* Menu ⋯ */
+.more-head {
+  font-size: 0.8rem;
+  color: var(--muted);
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+.more-head:empty {
+  display: none;
+}
+
+.menu-item {
+  width: 100%;
+  text-align: left;
+}
+
+.menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 0.1rem 0;
+}
+
+/* Prévia da própria tela com os controles do compartilhamento */
+.pip-actions {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  display: flex;
+  gap: 0.3rem;
+  z-index: 2;
+}
+
+.pip-btn {
+  font: inherit;
+  font-size: 0.8rem;
+  color: #fff;
+  background: rgba(10, 12, 18, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  white-space: nowrap;
+}
+
+.pip-btn:hover {
+  border-color: var(--accent);
+}
+
+.pip-btn.active {
+  background: rgba(239, 68, 68, 0.55);
+}
+
+.pip-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Na prévia pequena só o ícone; ampliada, ícone + texto. */
+.self-pip:not(.large) .pip-btn .lbl {
+  display: none;
+}
+
+@media (max-width: 700px) {
+  .room-link {
+    max-width: 44vw;
+    padding: 0.28em 0.7em 0.28em 0.55em;
+  }
+
+  .pills {
+    gap: 0.3rem;
+  }
+
+  .toast {
+    top: max(0.6rem, env(safe-area-inset-top));
+  }
+
+  .controls {
+    justify-content: space-around;
+  }
+
+  .controls .ctl {
+    flex: 0 0 auto;
+    min-width: 3.4rem;
+  }
+
+  /* O botão de compartilhar/câmera é o único com texto: ocupa o espaço que sobra. */
+  #share-screen-btn {
+    flex: 1 1 auto;
+    max-width: 11rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* O próprio chip fica compacto: o que importa no celular são os outros. */
+  #chip-self .chip-sub {
+    display: none;
+  }
+
+  .pip-btn {
+    padding: 0.3rem 0.55rem;
+    font-size: 0.9rem;
+  }
+}
+
+/* Painel da pessoa (toque no nome) */
+.chip {
+  cursor: pointer;
+}
+
+#chip-self {
+  cursor: default;
+}
+
+.chip-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-width: min(340px, 92vw);
+  white-space: normal;
+  cursor: default;
+}
+
+.pp-status {
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.pp-status.ok {
+  color: #86efac;
+}
+
+.pp-status.bad {
+  color: #fca5a5;
+}
+
+.pp-volume {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-top: 0.2rem;
+}
+
+.pp-volume input {
+  width: 100%;
+  accent-color: var(--accent-2);
+  padding: 0;
+}
+
+.pp-note {
+  font-size: 0.72rem;
+}
+
+.chip-icons .ico-lock {
+  font-size: 0.75rem;
+}
+
+.pill-secure[data-warn="true"] {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+}
+
+.pp-diag {
+  align-self: flex-start;
+  margin-top: 0.2rem;
 }

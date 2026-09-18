@@ -12,6 +12,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium } from "playwright";
 import { startNetem } from "./netem.mjs";
 
+// A qualidade fica no menu "⋯": abre o menu, escolhe e fecha (como a pessoa faria).
+async function pickQuality(page, value) {
+  await page.click("#more-btn");
+  await page.selectOption("#quality-select", value);
+  await page.keyboard.press("Escape");
+}
+
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const bin = (rel) => fileURLToPath(new URL(`../node_modules/${rel}`, import.meta.url));
 const PEER_PORT = Number(process.env.PEER_PORT || 9130);
@@ -182,7 +189,7 @@ async function scenario({ name, users, sharers, setup, secs = 60, warm = 20, eve
   await sleep(8000);
   for (const s of sharers) {
     const u = us.find((x) => x.name === s);
-    await u.page.selectOption("#quality-select", "alta");
+    await pickQuality(u.page, "alta");
     await u.page.click("#share-screen-btn");
   }
   const viewers = us.filter((u) => !sharers.includes(u.name) || sharers.length > 1);

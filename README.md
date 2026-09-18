@@ -37,8 +37,9 @@ The project is, and will stay, free and open.
   automatic quality adjustment when someone's internet can't keep up.
 - 📱 **Phones:** join from the browser, talk, listen, watch screens in fullscreen, and show
   your **camera** (rear or front).
-- 🔒 **End-to-end encryption** (DTLS-SRTP, mandatory in WebRTC), plus a per-person,
-  Signal-style security code to confirm nobody is in the middle.
+- 🔒 **End-to-end encryption** (DTLS-SRTP, mandatory in WebRTC), **verified automatically**:
+  each side signs the connection's security code with the room key, so a 🔒 next to a name
+  means nobody is in the middle — no codes to read out loud.
 - 🌉 **Never without a path.** NitroCall tries, in order:
   1. **direct** between the two devices;
   2. **a friend in the room as a bridge**, picked automatically by connection quality;
@@ -46,9 +47,13 @@ The project is, and will stay, free and open.
      Media stays encrypted: TURN forwards packets it cannot open.
 - 🎲 **No sign-up:** pick a room code and the app gives you a funny random name
   ("Pocket Pair Without Wi-Fi", "Joker in Pajamas"…). You can change it.
-- 🌎 **English and Portuguese.**
-- 💻 Also available as a **Windows app** (Tauri) with a tray icon, global mute shortcut and
-  auto-update. App and website join the same rooms.
+- 🔗 **One-tap invites:** tap the room name to copy a link; whoever opens it lands in the room
+  with everything filled in and just taps "Join".
+- 🧭 **Four buttons:** mic, share, ⋯, leave. Everything else lives in the ⋯ menu or right on
+  the thing it controls (screen controls sit on your own preview).
+- 🌎 **Portuguese and English** (Portuguese by default; switch anytime).
+- 🌐 **Nothing to install:** it runs in the browser, on desktop and on phones. Open the link
+  and you're in.
 
 ## How it works (no jargon)
 
