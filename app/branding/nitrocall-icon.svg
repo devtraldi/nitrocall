@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0EA5E9"/>
+      <stop offset="55%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#A21CAF"/>
+    </linearGradient>
+    <linearGradient id="letter" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#E0F2FE"/>
+    </linearGradient>
+    <linearGradient id="spark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FDE047"/>
+      <stop offset="100%" stop-color="#FB923C"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1024" height="1024" rx="220" fill="url(#bg)"/>
+
+  <!-- linhas de velocidade / energia "nitro" -->
+  <g stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="22" stroke-linecap="round">
+    <line x1="700" y1="190" x2="860" y2="130"/>
+    <line x1="740" y1="250" x2="880" y2="200"/>
+    <line x1="780" y1="315" x2="900" y2="275"/>
+  </g>
+
+  <!-- monograma N -->
+  <path d="M 336,760 L 336,264 L 688,760 L 688,264"
+        fill="none"
+        stroke="url(#letter)"
+        stroke-width="96"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+
+  <!-- faísca "nitro" -->
+  <path d="M 512 838 L 552 780 L 522 780 L 562 720 L 500 796 L 530 796 Z" fill="url(#spark)"/>
+</svg>

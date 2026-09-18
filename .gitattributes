@@ -1,0 +1,7 @@
+* text=auto
+# The site file carries a CSP with script hashes: line endings must never change.
+index.html -text
+*.png binary
+*.ico binary
+*.icns binary
+*.wasm binary

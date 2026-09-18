@@ -1,0 +1,14 @@
+name = "nitrocall-turn"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+# Secrets (not stored here):
+#   npx wrangler secret put TURN_KEY_ID
+#   npx wrangler secret put TURN_KEY_API_TOKEN
+
+# Per-IP rate limit (optional, recommended): 30 requests per minute. If your plan/wrangler
+# version rejects this block, delete it; the Worker works without it.
+[[ratelimits]]
+name = "LIMITER"
+namespace_id = "1001"
+simple = { limit = 30, period = 60 }

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f1117" />
+    <link rel="icon" type="image/png" href="/src/assets/favicon.png" />
+    <title>NitroCall</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <section id="join-view" class="join-view">
+      <div class="join-card">
+        <div class="lang-switch" role="group" aria-label="Idioma / Language">
+          <button type="button" data-lang="pt">PT</button><button type="button" data-lang="en">EN</button>
+        </div>
+        <h1 class="sr-only">NitroCall</h1>
+        <img src="/src/assets/logo-full.png" alt="Nitro Poker Club" class="logo-full" />
+        <p class="tagline" data-i18n="join.tagline"></p>
+        <p id="browser-warning" class="browser-warning hidden"></p>
+        <form id="join-form">
+          <label>
+            <span data-i18n="join.room"></span>
+            <span class="row">
+              <input id="room-code-input" data-i18n-placeholder="join.roomPh" required autocomplete="off" autocapitalize="off" spellcheck="false" />
+              <button id="gen-room-btn" type="button" class="btn ghost icon" data-i18n-title="join.genRoom">🎲</button>
+            </span>
+          </label>
+          <label>
+            <span data-i18n="join.name"></span>
+            <span class="row">
+              <input id="name-input" required maxlength="40" autocomplete="off" />
+              <button id="gen-name-btn" type="button" class="btn ghost icon" data-i18n-title="join.genName">🎲</button>
+            </span>
+          </label>
+          <details id="join-more" class="join-more">
+            <summary data-i18n="join.options"></summary>
+            <label>
+              <span data-i18n="join.password"></span>
+              <input id="password-input" type="password" data-i18n-placeholder="join.passwordPh" autocomplete="off" />
+            </label>
+            <label id="autostart-label" class="check hidden">
+              <input id="autostart-input" type="checkbox" />
+              <span data-i18n="join.autostart"></span>
+            </label>
+          </details>
+          <button type="submit" class="btn primary" data-i18n="join.enter"></button>
+          <p id="join-error" class="join-error hidden"></p>
+        </form>
+        <p id="mobile-note" class="hint mobile-note hidden" data-i18n="join.mobileNote"></p>
+        <p class="join-foot">
+          <span id="build-info"></span> ·
+          <a href="https://github.com/devtraldi/nitrocall" target="_blank" rel="noopener" data-i18n="join.about"></a>
+        </p>
+      </div>
+    </section>
+
+    <section id="call-view" class="call-view hidden">
+      <header class="topbar">
+        <div class="brand">
+          <img src="/src/assets/logo-mark.png" alt="" class="logo-mark" />
+          <span class="brand-name">NitroCall</span>
+        </div>
+        <div class="room-info">
+          <button id="copy-room-btn" class="room-code" type="button" data-i18n-title="call.copyRoom">
+            <span id="room-code-text"></span><span class="copy-icon">⧉</span>
+          </button>
+          <button id="invite-btn" class="btn ghost small" type="button" data-i18n-title="call.inviteTitle">✉️ <span class="lbl" data-i18n="call.invite"></span></button>
+          <span id="self-label" class="self-label"></span>
+        </div>
+        <div class="pills">
+          <div id="health-pill" class="pill pill-health" data-state="connecting" data-i18n-title="health.title"></div>
+          <div id="secure-pill" class="pill pill-secure" data-state="pending">🔒</div>
+          <div id="broker-pill" class="pill pill-connecting"></div>
+        </div>
+      </header>
+
+      <div id="participants" class="participants"></div>
+
+      <div id="update-banner" class="update-banner hidden"><span id="update-text"></span><button id="update-btn" class="btn primary small" type="button" data-i18n="update.now"></button></div>
+      <div id="version-banner" class="update-banner version-banner hidden"></div>
+      <div id="bridge-banner" class="bridge-banner hidden"></div>
+
+      <div id="stage" class="stage">
+        <div id="screens" class="screens" data-count="0"></div>
+        <div id="stage-empty" class="stage-empty">
+          <div>
+            <p class="stage-empty-title"></p>
+            <p class="hint"></p>
+          </div>
+        </div>
+      </div>
+
+      <div id="status-log" class="status-log hidden"></div>
+
+      <footer class="controls">
+        <button id="toggle-mic-btn" class="btn" type="button"></button>
+        <button id="share-screen-btn" class="btn" type="button"></button>
+        <label class="quality" data-i18n-title="ctl.qualityTitle">
+          <select id="quality-select" class="select" data-i18n-aria="ctl.qualityAria">
+            <option value="auto" data-i18n="ctl.qAuto"></option>
+            <option value="alta" data-i18n="ctl.qAlta"></option>
+            <option value="media" data-i18n="ctl.qMedia"></option>
+            <option value="baixa" data-i18n="ctl.qBaixa"></option>
+          </select>
+        </label>
+        <button id="switch-screen-btn" class="btn hidden" type="button"></button>
+        <button id="screen-audio-btn" class="btn hidden" type="button"></button>
+        <button id="mini-btn" class="btn ghost hidden desktop-only" type="button" data-i18n-title="ctl.miniTitle">🗗</button>
+        <div class="more-wrap">
+          <button id="more-btn" class="btn ghost" type="button" data-i18n-title="ctl.more" aria-haspopup="true" aria-expanded="false">⋯</button>
+          <div id="more-panel" class="more-panel hidden" role="menu">
+            <label class="more-row"><span data-i18n="ctl.micSelect"></span><select id="mic-select" class="select"></select></label>
+            <label class="more-row" id="output-row"><span data-i18n="ctl.outputSelect"></span><select id="output-select" class="select"></select></label>
+            <button id="noise-btn" class="btn" type="button" data-i18n-title="ctl.noiseTitle"></button>
+            <div class="more-row lang-row">
+              <span data-i18n="ctl.language"></span>
+              <span class="lang-switch inline" role="group"><button type="button" data-lang="pt">PT</button><button type="button" data-lang="en">EN</button></span>
+            </div>
+            <button id="diag-btn" class="btn ghost" type="button" data-i18n="ctl.diag"></button>
+            <button id="diag-copy-btn" class="btn ghost hidden" type="button" data-i18n="ctl.diagCopy"></button>
+            <button id="diag-save-btn" class="btn ghost hidden" type="button" data-i18n="ctl.diagSave"></button>
+          </div>
+        </div>
+        <button id="leave-btn" class="btn danger" type="button" data-i18n="ctl.leave"></button>
+      </footer>
+
+      <div id="self-pip" class="self-pip hidden" data-i18n-title="pip.title">
+        <video muted autoplay playsinline></video>
+        <div class="pip-label">
+          <span class="rec-dot"></span>
+          <span class="pip-lines"><span id="pip-text"></span><span id="pip-quality"></span></span>
+        </div>
+      </div>
+
+      <div id="audio-sink" hidden></div>
+    </section>
+  </body>
+</html>

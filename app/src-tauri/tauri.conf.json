@@ -1,0 +1,84 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "NitroCall",
+  "version": "6.0.0",
+  "identifier": "com.rafat.nitrocall",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "NitroCall",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self' 'wasm-unsafe-eval'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' data: blob:",
+        "media-src": "'self' blob: mediastream:",
+        "font-src": "'self' data:",
+        "worker-src": "'self' blob:",
+        "connect-src": "'self' ipc: http://ipc.localhost https://0.peerjs.com wss://0.peerjs.com ws://localhost:* http://localhost:* wss://*:* https://*:*",
+        "object-src": "'none'",
+        "base-uri": "'self'",
+        "frame-ancestors": "'none'"
+      }
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["nitrocall"]
+      }
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc5N0FGRTBEN0M4NzhFQjcKUldTM2pvZDhEZjU2ZVRUQmRpWXV0SGRSN1ZYZXFIQlNtdjYrWTk5S1F1S3FCME1DNnozL0RtZGgK",
+      "endpoints": ["https://github.com/OWNER/nitrocall/releases/latest/download/latest.json"],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis"],
+    "publisher": "Nitro Poker Club",
+    "copyright": "© 2026 Nitro Poker Club. Código aberto (MIT).",
+    "category": "SocialNetworking",
+    "shortDescription": "NitroCall — voz e tela entre amigos, com segurança",
+    "longDescription": "Chamada de voz e compartilhamento de tela entre amigos, direto de PC a PC, com criptografia ponta a ponta (DTLS-SRTP). Sem conta, sem servidor para administrar, sem telemetria. Até 10 pessoas; quando dois amigos não se alcançam direto, o app escolhe sozinho quem faz ponte.",
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["PortugueseBR"],
+        "displayLanguageSelector": false
+      },
+      "wix": {
+        "language": ["pt-BR"]
+      }
+    }
+  }
+}
