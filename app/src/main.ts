@@ -20,6 +20,10 @@ import { BUILD, IS_WEB, VERSION } from "./buildInfo";
 import { closeMini, miniOpen, miniSupported, openMini, renderMini } from "./miniWindow";
 import { applyStatic, getLang, onLangChange, setLang, t } from "./i18n";
 import { isGeneratedName, randomName } from "./names";
+import { startDebugRadio, type DebugRadio } from "./debugRadio";
+import { onClockFallback } from "./webrtc/clock";
+import { DEFAULT_RELAYS } from "./webrtc/nostr";
+import { syntheticMic } from "./webrtc/media";
 
 const STORAGE = {
   room: "nitrocall.room",
@@ -43,6 +47,62 @@ declare global {
   }
 }
 const CHIME_GRACE_MS = 3000;
+
+// Parâmetros do link depois do "#": sala, e para testes debug (rádio de log) e bot.
+function hashParams(): URLSearchParams {
+  return new URLSearchParams(location.hash.replace(/^#/, ""));
+}
+
+// Rádio de log (#debug=<token>) e modo bot (#bot=<nome>, &cam=1): ver debugRadio.ts.
+let radio: DebugRadio | null = null;
+let botMode: { name: string; cam: boolean } | null = null;
+// Entrou sem microfone (negado/inexistente): só ouvindo; 🎤 tenta de novo.
+let listenOnly = false;
+// Abas do mesmo navegador na mesma sala: a mais nova fica, a antiga sai (no iPhone cada
+// link aberto pelo WhatsApp pode virar uma aba nova, e a velha seguia ocupando uma vaga).
+const TAB_ID = Math.random().toString(36).slice(2);
+let tabChannel: BroadcastChannel | null = null;
+let currentRoomKey = "";
+
+// Erros inesperados (de qualquer parte do app ou do PeerJS) vão para o registro: sem isso,
+// uma falha própria de um navegador (ex.: WebKit no iPhone) não deixava rastro no diagnóstico.
+let unexpectedWindow = 0;
+let unexpectedCount = 0;
+
+function logUnexpected(kind: string, err: unknown): void {
+  const now = Date.now();
+  if (now - unexpectedWindow > 60_000) {
+    unexpectedWindow = now;
+    unexpectedCount = 0;
+  }
+  if (++unexpectedCount > 20) return;
+  const e = err as { name?: string; message?: string; stack?: string } | null;
+  const msg = e?.message ?? String(err);
+  const stack = (e?.stack ?? "")
+    .split("\n")
+    .slice(0, 3)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .join(" | ")
+    .slice(0, 300);
+  try {
+    ui.log(`ERRO (${kind}): ${e?.name ? `${e.name}: ` : ""}${msg}${stack ? ` [${stack}]` : ""}`);
+  } catch {
+    console.error(err);
+  }
+}
+
+// Relógio em Web Worker que não bate (navegador bloqueou): passou para a página; fica registrado.
+onClockFallback((reason) => {
+  try {
+    ui.log(`RELÓGIO: ${reason}; usando o relógio da página.`);
+  } catch {
+    /* antes da tela */
+  }
+});
+
+window.addEventListener("error", (ev) => logUnexpected("js", ev.error ?? ev.message));
+window.addEventListener("unhandledrejection", (ev) => logUnexpected("promessa", ev.reason));
 const MEDIA_KEEPALIVE_MS = 2000;
 
 let room: RoomManager | null = null;
@@ -288,7 +348,7 @@ function releaseWakeLock(): void {
 
 // Microfone → (RNNoise) → chamada. Se a supressão não carregar, vai o microfone cru.
 async function buildMic(deviceId?: string): Promise<MediaStream> {
-  const raw = await getMicStream(deviceId);
+  const raw = botMode ? syntheticMic(getAudioContext(), true) : await getMicStream(deviceId);
   const oldRaw = rawMic;
   const oldNoise = noise;
   rawMic = raw;
@@ -445,8 +505,14 @@ async function startShare(): Promise<void> {
   const camera = !canShareScreen();
   try {
     stream = await captureShare();
-  } catch {
-    ui.log(camera ? t("msg.cameraFail") : t("msg.shareCancelled"));
+  } catch (err) {
+    if (!camera) {
+      ui.log(t("msg.shareCancelled"));
+      return;
+    }
+    const e = err as { name?: string; message?: string } | null;
+    ui.log(t("msg.cameraFail", { err: `${e?.name ?? "Erro"}: ${e?.message ?? String(err)}` }));
+    ui.toast(e?.name === "NotAllowedError" || e?.name === "SecurityError" ? t("msg.cameraDenied") : t("msg.cameraFail", { err: e?.name ?? "?" }), 8000);
     return;
   }
   screenStream = stream;
@@ -605,18 +671,19 @@ async function joinRoom(): Promise<void> {
   const joinError = ui.dom.joinError();
   joinError.classList.add("hidden");
 
+  listenOnly = false;
   try {
     localStream = await buildMic();
   } catch (err) {
-    joinError.textContent = t("join.micError");
-    joinError.classList.remove("hidden");
+    // Sem microfone não é motivo para ficar de fora: entra ouvindo (e vendo as telas).
     console.error(err);
-    return;
+    localStream = syntheticMic(getAudioContext(), false);
+    listenOnly = true;
   }
   // O clique em "Entrar" é o gesto do usuário que libera o áudio da página.
   getAudioContext();
 
-  micMuted = false;
+  micMuted = listenOnly;
   mySlot = 0;
   selfHealth = null;
   joinedAt = Date.now();
@@ -722,6 +789,12 @@ async function joinRoom(): Promise<void> {
   native.keepAwake(true);
   native.setInCall(true);
   ui.log(t("msg.joining", { room: roomCode, name: myName }));
+  if (listenOnly) {
+    room.setMuted(true);
+    ui.log(t("msg.listenOnly"));
+    ui.setNotice(t("notice.listenOnly"));
+  }
+  announceTab(roomCode);
   if (document.visibilityState === "hidden") room.setBackground(isMobile());
   void refreshMicList();
   void refreshOutputList();
@@ -806,6 +879,57 @@ function onLanguageChanged(): void {
   void refreshOutputList();
 }
 
+// #debug=<token>: liga o rádio de log. #bot=<nome>: entra sozinho com microfone sintético
+// (e &cam=1: mostra uma câmera sintética). Servem para testar navegadores reais (simulador,
+// emulador, o celular de alguém) sem automação e sem pedir permissões.
+function startTestModes(): void {
+  const hp = hashParams();
+  const token = hp.get("debug");
+  if (token && !radio) {
+    const nostrRaw = load(STORAGE.nostr).trim();
+    const relays = nostrRaw && nostrRaw !== "off" ? nostrRaw.split(",").map((x) => x.trim()).filter(Boolean) : DEFAULT_RELAYS;
+    radio = startDebugRadio(token, relays);
+    radio.log(`rádio de log ligado · NitroCall ${VERSION} (${BUILD}) · ${navigator.userAgent}`);
+    setInterval(() => {
+      if (room) radio?.state(room.debugSnapshot());
+    }, 20_000);
+  }
+  const bot = hp.get("bot");
+  if (bot && !room) {
+    botMode = { name: bot.slice(0, 40), cam: hp.get("cam") === "1" };
+    window.__NITRO_FAKE_SCREEN__ = true;
+    ui.dom.nameInput().value = botMode.name;
+    setTimeout(() => {
+      if (!ui.dom.roomCodeInput().value.trim() || room) return;
+      void joinRoom().then(() => {
+        if (botMode?.cam) setTimeout(() => room && !screenStream && void startShare(), 4000);
+      });
+    }, 500);
+  }
+}
+
+// Mesma sala aberta de novo neste navegador (outra aba): a antiga sai.
+function announceTab(roomCode: string): void {
+  currentRoomKey = roomCode.trim().toLowerCase();
+  try {
+    if (!tabChannel) {
+      tabChannel = new BroadcastChannel("nitrocall-tabs");
+      tabChannel.onmessage = (e: MessageEvent<{ t?: string; id?: string; room?: string }>) => {
+        const m = e.data;
+        if (m?.t !== "join" || m.id === TAB_ID || !room || m.room !== currentRoomKey) return;
+        ui.log(t("join.otherTab"));
+        leaveRoom();
+        const err = ui.dom.joinError();
+        err.textContent = t("join.otherTab");
+        err.classList.remove("hidden");
+      };
+    }
+    tabChannel.postMessage({ t: "join", id: TAB_ID, room: currentRoomKey });
+  } catch {
+    /* navegador sem BroadcastChannel */
+  }
+}
+
 function closeMore(): void {
   ui.dom.morePanel().classList.add("hidden");
   ui.dom.moreBtn().setAttribute("aria-expanded", "false");
@@ -868,7 +992,11 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   noiseOn = load(STORAGE.noise) !== "0";
   ui.setNoiseButton(noiseOn ? "on" : "off");
-  ui.setLogSink(native.appendLog);
+  ui.setLogSink((line) => {
+    native.appendLog(line);
+    radio?.log(line);
+  });
+  startTestModes();
   screenQuality = readQuality();
   ui.setQualitySelect(screenQuality, null);
   ui.dom.genRoomBtn().addEventListener("click", () => {
@@ -882,6 +1010,23 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   ui.dom.toggleMicBtn().addEventListener("click", () => {
+    if (listenOnly && room) {
+      void buildMic()
+        .then((stream) => {
+          if (!room) return;
+          listenOnly = false;
+          localStream = stream;
+          room.replaceMicStream(stream);
+          watchSpeakingFor("self", stream);
+          micMuted = false;
+          room.setMuted(false);
+          ui.setNotice(null);
+          updateMicButton();
+          renderSelfChip();
+        })
+        .catch(() => ui.toast(t("join.micError")));
+      return;
+    }
     micMuted = !micMuted;
     room?.setMuted(micMuted);
     updateMicButton();

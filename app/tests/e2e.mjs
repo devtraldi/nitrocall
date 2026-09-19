@@ -203,7 +203,70 @@ function pcInit(relayOnly) {
   Object.setPrototypeOf(window.RTCPeerConnection, Orig);
 }
 
-async function makeUser(name, { room = ROOM, blockSlots = [], blockBoot = [], blockMedia = [], cap = null, password = "", url = APP_URL, hd = false, relayOnly = false, turn = TURN_DEFAULT, device = null } = {}) {
+// Motor "à moda WebKit": o construtor da RTCPeerConnection LANÇA exceção quando a lista de
+// servidores tem algum endereço que case com o padrão (é o que o WebKit faz com o que não
+// aceita). noMic: o microfone é negado (NotAllowedError).
+function engineInit({ ctorRejects, noMic, safariAdapter, deadWorker, camPicky }) {
+  if (camPicky) {
+    // Câmera exigente: recusa pedidos com resolução (OverconstrainedError), aceita o simples.
+    const gum0 = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    navigator.mediaDevices.getUserMedia = async (c) => {
+      if (c?.video && typeof c.video === "object" && c.video.width) {
+        throw new DOMException("width não suportado", "OverconstrainedError");
+      }
+      return gum0(c);
+    };
+  }
+  if (deadWorker) {
+    // Worker "bloqueado": é criado, aceita mensagens, mas nunca responde nem avisa erro.
+    window.Worker = class {
+      postMessage() {}
+      terminate() {}
+      addEventListener() {}
+      removeEventListener() {}
+    };
+  }
+  if (safariAdapter) {
+    // O que o webrtc-adapter faz no Safari (shimRTCIceServerUrls): normaliza e REESCREVE
+    // config.iceServers antes de criar a conexão — em modo estrito, como no bundle.
+    const Prev0 = window.RTCPeerConnection;
+    const normalize = function (cfg) {
+      "use strict";
+      if (cfg && cfg.iceServers) {
+        const list = [];
+        for (const s of cfg.iceServers) list.push(s);
+        cfg.iceServers = list;
+      }
+    };
+    window.RTCPeerConnection = function (cfg, ...rest) {
+      normalize(cfg);
+      return new Prev0(cfg, ...rest);
+    };
+    window.RTCPeerConnection.prototype = Prev0.prototype;
+    Object.setPrototypeOf(window.RTCPeerConnection, Prev0);
+  }
+  if (ctorRejects) {
+    const re = new RegExp(ctorRejects);
+    const Prev = window.RTCPeerConnection;
+    window.RTCPeerConnection = function (cfg = {}, ...rest) {
+      const urls = (cfg.iceServers ?? []).flatMap((s) => [].concat(s.urls));
+      const bad = urls.find((u) => re.test(u));
+      if (bad) throw new TypeError(`Bad ICE server URL (simulado WebKit): ${bad}`);
+      return new Prev(cfg, ...rest);
+    };
+    window.RTCPeerConnection.prototype = Prev.prototype;
+    Object.setPrototypeOf(window.RTCPeerConnection, Prev);
+  }
+  if (noMic) {
+    const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    navigator.mediaDevices.getUserMedia = async (c) => {
+      if (c?.audio) throw new DOMException("Permission denied", "NotAllowedError");
+      return gum(c);
+    };
+  }
+}
+
+async function makeUser(name, { room = ROOM, blockSlots = [], blockBoot = [], blockMedia = [], cap = null, password = "", url = APP_URL, hd = false, relayOnly = false, turn = TURN_DEFAULT, device = null, ctorRejects = null, noMic = false, safariAdapter = false, deadWorker = false, camPicky = false, hash = "", autoJoin = true } = {}) {
   const browser = await chromium.launch({
     headless: HEADLESS,
     args: [
@@ -232,6 +295,7 @@ async function makeUser(name, { room = ROOM, blockSlots = [], blockBoot = [], bl
   );
   if (hd) await context.addInitScript(hdScreenInit);
   if (!hd) await context.addInitScript(pcInit, relayOnly);
+  if (ctorRejects || noMic || safariAdapter || deadWorker || camPicky) await context.addInitScript(engineInit, { ctorRejects, noMic, safariAdapter, deadWorker, camPicky });
   const page = await context.newPage();
   page.on("pageerror", (err) => console.log(`  [${name} pageerror] ${err}`));
   if (process.env.VERBOSE) {
@@ -239,9 +303,9 @@ async function makeUser(name, { room = ROOM, blockSlots = [], blockBoot = [], bl
   }
   const logs = [];
   page.on("console", (msg) => logs.push(msg.text()));
-  await page.goto(url);
-  const user = { name, room, password, browser, page, logs };
-  await join(user);
+  await page.goto(hash ? `${url}#${hash}` : url);
+  const user = { name, room, password, browser, context, page, logs };
+  if (autoJoin) await join(user);
   return user;
 }
 
@@ -619,6 +683,118 @@ async function scenarioV6() {
   for (const u of [a, b]) await u.browser.close();
 }
 
+// 6.2: o que derrubava o iPhone (motor que recusa parte dos servidores ICE com exceção) e as
+// ferramentas para testar celulares de verdade: rádio de log, modo bot, só ouvindo, abas.
+async function scenarioV62() {
+  const chip = (u, name) => u.page.evaluate((n) => {
+    const c = [...document.querySelectorAll("#participants .chip")].find((x) => x.dataset.name === n);
+    return c ? { audio: c.dataset.audio, presence: c.dataset.presence } : null;
+  }, name);
+
+  console.log("\n[W0] O bug real do iPhone: o webrtc-adapter do Safari reescreve config.iceServers");
+  const r0 = `${ROOM}-w0`;
+  const pc0 = await makeUser("PC0", { room: r0, turn: TURN_OK });
+  await sleep(1200);
+  const saf = await makeUser("Safari0", { room: r0, turn: TURN_OK, safariAdapter: true, device: "iPhone 13" });
+  await waitFor("PC e 'Safari' se ouvem (antes: 'Attempted to assign to readonly property')", async () =>
+    (await chip(pc0, "Safari0"))?.audio === "ok" && (await chip(saf, "PC0"))?.audio === "ok", 30000);
+  await waitFor("Nenhum 'ERRO' no registro do 'Safari'", async () => !saf.logs.some((l) => l.includes("ERRO")), 1000);
+  for (const u of [pc0, saf]) await u.browser.close();
+
+  console.log("\n[W0b] Navegador com o Web Worker bloqueado (suspeita do Brave): o relógio passa para a página");
+  const r0b = `${ROOM}-w0b`;
+  const pcW = await makeUser("PCW", { room: r0b, turn: TURN_OK });
+  await sleep(1200);
+  const brave = await makeUser("BraveSim", { room: r0b, turn: TURN_OK, deadWorker: true, device: "iPhone 13" });
+  // (O relógio em Worker só existe na versão HTML; no modo desenvolvimento já é o da página.)
+  if (WEB_FILE) await waitFor("Registro diz que o relógio passou para a página", async () => brave.logs.some((l) => l.includes("RELÓGIO:")), 8000);
+  await waitFor("Relógio batendo (ticks subindo)", async () => {
+    const a = (await brave.page.evaluate(() => window.__NITRO_DEBUG__?.()))?.ticks ?? 0;
+    await sleep(2200);
+    const b = (await brave.page.evaluate(() => window.__NITRO_DEBUG__?.()))?.ticks ?? 0;
+    return b > a;
+  }, 8000);
+  await waitFor("PC e BraveSim se ouvem rápido", async () =>
+    (await chip(pcW, "BraveSim"))?.audio === "ok" && (await chip(brave, "PCW"))?.audio === "ok", 15000);
+  for (const u of [pcW, brave]) await u.browser.close();
+
+  console.log("\n[W1] Motor que LANÇA exceção com parte dos servidores ICE (como o WebKit do iPhone), rede só-relay");
+  const r1 = `${ROOM}-w1`;
+  const pcA = await makeUser("PCA", { room: r1, turn: TURN_OK });
+  await sleep(1200);
+  const ios = await makeUser("iOSsim", { room: r1, turn: TURN_OK, relayOnly: true, ctorRejects: "stun1\\.l\\.google", device: "iPhone 13" });
+  await waitFor("Mesmo com o motor recusando um servidor, os dois se ouvem (via TURN)", async () =>
+    (await chip(pcA, "iOSsim"))?.audio === "ok" && (await chip(ios, "PCA"))?.audio === "ok", 45000);
+  await waitFor("Registro diz qual servidor o navegador recusou", async () =>
+    ios.logs.some((l) => l.includes("recusou stun:stun1.l.google.com")), 5000);
+  await waitFor("Nenhum 'ERRO' no registro do iPhone simulado", async () => !ios.logs.some((l) => l.includes("ERRO")), 1000);
+  for (const u of [pcA, ios]) await u.browser.close();
+
+  console.log("\n[W1b] Motor recusa TODO o nosso TURN (o do PeerJS ele aceita, como o WebKit real); rede normal: conecta direto e registra a recusa");
+  const r1b = `${ROOM}-w1b`;
+  const pcB = await makeUser("PCB", { room: r1b, turn: TURN_OK });
+  await sleep(1200);
+  const ios2 = await makeUser("iOSsim2", { room: r1b, turn: TURN_OK, ctorRejects: ":3479", device: "iPhone 13" });
+  await waitFor("Conectam direto", async () => (await chip(pcB, "iOSsim2"))?.audio === "ok" && (await chip(ios2, "PCB"))?.audio === "ok", 30000);
+  await waitFor("Registro diz que o TURN foi recusado", async () => ios2.logs.some((l) => l.includes("recusou turn:")), 5000);
+  for (const u of [pcB, ios2]) await u.browser.close();
+
+  console.log("\n[W2] Rádio de log (#debug): o ouvinte recebe ao vivo o registro do aparelho");
+  const token = `tok-${Date.now().toString(36)}`;
+  const heard = [];
+  const lis = spawn(process.execPath, [fileURLToPath(new URL("./listen.mjs", import.meta.url)), token], {
+    env: { ...process.env, RELAYS: `ws://localhost:${NOSTR_PORT}` },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.push(lis);
+  lis.stdout.on("data", (d) => heard.push(...String(d).split("\n")));
+  await sleep(1500);
+  const r2 = `${ROOM}-w2`;
+  const dbg = await makeUser("Rádio", { room: r2, hash: `debug=${token}` });
+  await waitFor("Ouvinte recebe o 'olá' do aparelho (navegador e recursos)", async () => heard.some((l) => l.includes("conectou:")), 20000);
+  await waitFor("Ouvinte recebe o registro ('Entrando na sala')", async () => heard.some((l) => l.includes("Entrando na sala")), 20000);
+  await waitFor("Ouvinte recebe o estado (a cada 10 s)", async () => heard.some((l) => l.includes("ⓢ estado")), 25000);
+  lis.kill();
+
+  console.log("\n[W3] Modo bot (#bot, &cam=1): entra sozinho, fala e mostra câmera/tela sintética");
+  const robo = await makeUser("Robo", { room: r2, hash: `sala=${r2}&bot=Robo&cam=1`, autoJoin: false });
+  await waitFor("Rádio ouve o Robo (áudio ok) sem ninguém clicar em nada", async () => (await chip(dbg, "Robo"))?.audio === "ok", 30000);
+  await waitFor("Rádio vê a tela/câmera do Robo", async () =>
+    dbg.page.evaluate(() => [...document.querySelectorAll(".screen-tile")].some((t) => t.dataset.state === "ok")), 30000);
+  for (const u of [robo]) await u.browser.close();
+
+  console.log("\n[W4] Microfone negado: entra só ouvindo, avisa, e os outros o veem");
+  const mudo = await makeUser("SemMic", { room: r2, noMic: true });
+  await waitFor("Aviso 'só ouvindo' aparece", async () =>
+    mudo.page.evaluate(() => {
+      const b = document.querySelector("#notice-banner");
+      return !!b && !b.classList.contains("hidden") && b.textContent.includes("só ouvindo");
+    }), 15000);
+  await waitFor("Rádio vê o SemMic na sala (mudo)", async () => !!(await chip(dbg, "SemMic")), 30000);
+  await waitFor("SemMic ouve o Rádio", async () => (await chip(mudo, "Rádio"))?.audio === "ok", 30000);
+
+  console.log("\n[W6] Celular com câmera exigente (recusa resolução): a câmera abre no pedido mais simples");
+  const cam = await makeUser("CamExigente", { room: r2, camPicky: true, device: "Pixel 7" });
+  await waitFor("CamExigente conectado", async () => (await chip(dbg, "CamExigente"))?.audio === "ok", 30000);
+  await cam.page.click("#share-screen-btn");
+  await waitFor("Rádio vê a 'Câmera de CamExigente'", async () =>
+    dbg.page.evaluate(() => [...document.querySelectorAll(".screen-tile")].some((t) =>
+      t.querySelector(".screen-name")?.textContent.startsWith("Câmera de CamExigente") && t.dataset.state === "ok")), 25000);
+  await waitFor("Sem 'Não consegui abrir a câmera' no registro", async () => !cam.logs.some((l) => l.includes("Não consegui abrir a câmera")), 1000);
+  await cam.browser.close();
+
+  console.log("\n[W5] Mesma sala aberta de novo no mesmo navegador: a aba antiga sai");
+  const aba2 = await mudo.context.newPage();
+  await aba2.goto(`${APP_URL}#sala=${r2}`);
+  await aba2.fill("#name-input", "SemMic2");
+  await aba2.click("#join-form button[type=submit]");
+  await waitFor("Aba antiga volta para a entrada e explica o motivo", async () =>
+    mudo.page.evaluate(() => !document.querySelector("#join-view").classList.contains("hidden") &&
+      (document.querySelector("#join-error")?.textContent ?? "").includes("outra aba")), 15000);
+  await waitFor("A aba nova segue na sala", async () => aba2.evaluate(() => document.querySelector("#join-view").classList.contains("hidden")), 5000);
+  for (const u of [dbg, mudo]) await u.browser.close();
+}
+
 async function scenarioMixed() {
   console.log("\n[M] Sala mista: app + NitroCall.html (file://)");
   const room = `${ROOM}-mix`;
@@ -747,6 +923,10 @@ async function main() {
   }
   if (process.env.ONLY === "nat") {
     await scenarioNat();
+    return;
+  }
+  if (process.env.ONLY === "v62") {
+    await scenarioV62();
     return;
   }
   if (process.env.ONLY === "v6") {

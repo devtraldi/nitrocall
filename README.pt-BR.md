@@ -88,6 +88,19 @@ os aparelhos se acharem, o NitroCall usa serviços públicos e gratuitos:
 
 O código da sala vai depois do `#` no link de convite e nunca é enviado ao GitHub.
 
+## Onde foi testado
+
+| Aparelho | Navegador | Como | Resultado |
+|---|---|---|---|
+| iPhone (iOS 18.7) | Safari, Chrome, Brave | aparelho real, Wi-Fi e 4G, com bots na sala | entra, ouve/é ouvido, 🔒, câmera nos dois sentidos, repasse pelo TURN |
+| Windows | Chrome, Edge | testes automáticos (200+ verificações) e uso real | tudo |
+| Android | motor do Chrome | automático, perfis de celular emulados | entra, câmera, segundo plano/volta |
+| iPhone/Android | qualquer | verificações automáticas "à moda WebKit" (configuração ICE rígida, adapter do Safari, Worker bloqueado) | entra |
+
+Ainda não verificado em aparelho real: Android, iPad, Firefox. Se algo falhar, abra o link com
+`&debug=<qualquer-palavra>` no fim e mande a palavra para quem cuida do app: o app transmite o
+registro ao vivo (cifrado) e dá para ver o problema acontecendo.
+
 ## Limites, com honestidade
 
 - **Pensado para 2 a 8 pessoas.** 9–10 funciona, mas é experimental: quem compartilha a tela

@@ -186,11 +186,20 @@ export function setIconButton(btn: HTMLElement, text: string): void {
   btn.setAttribute("aria-label", label);
 }
 
+// "Reconectando…" só aparece se durar: no celular a conexão com o servidor da sala cai e
+// volta em segundos (a chamada não depende dela) e o aviso ficava piscando no topo.
+const BROKER_QUIET_MS = 5_000;
+let brokerQuietTimer: ReturnType<typeof setTimeout> | null = null;
+
 export function setBrokerPill(state: BrokerState = brokerState): void {
+  const changed = state !== brokerState;
   brokerState = state;
   const pill = dom.brokerPill();
-  pill.className = `pill pill-${state}`;
+  const quiet = state === "reconnecting" && (changed || pill.classList.contains("quiet"));
+  pill.className = `pill pill-${state}${quiet ? " quiet" : ""}`;
   pill.textContent = t(`broker.${state}`);
+  if (brokerQuietTimer) clearTimeout(brokerQuietTimer);
+  brokerQuietTimer = quiet ? setTimeout(() => pill.classList.remove("quiet"), BROKER_QUIET_MS) : null;
 }
 
 // ----------------------------------------------------------------------------

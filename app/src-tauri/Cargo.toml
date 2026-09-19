@@ -1,6 +1,6 @@
 [package]
 name = "nitrocall"
-version = "6.1.0"
+version = "6.2.0"
 description = "NitroCall - chamada de voz e tela P2P"
 authors = ["you"]
 edition = "2021"

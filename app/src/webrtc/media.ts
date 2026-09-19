@@ -174,24 +174,35 @@ export function canShareScreen(): boolean {
 
 // Câmera do celular no lugar da tela: 720p30, traseira por padrão (mostrar algo).
 export async function getCameraStream(facing: "user" | "environment"): Promise<MediaStream> {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: {
-      facingMode: { ideal: facing },
-      width: { ideal: 1280 },
-      height: { ideal: 720 },
-      frameRate: { ideal: 30, max: 30 },
-    },
-    audio: false,
-  });
-  const track = stream.getVideoTracks()[0] as (MediaStreamTrack & { contentHint?: string }) | undefined;
-  if (track) {
+  // Modo bot/testes: câmera sintética (canvas), sem pedir permissão.
+  if (window.__NITRO_FAKE_SCREEN__) return fakeScreenStream();
+  // Do pedido mais exigente ao mais simples: alguns celulares recusam resolução/fps pedidos
+  // (OverconstrainedError) ou a câmera traseira. Permissão negada não adianta repetir.
+  const attempts: MediaStreamConstraints[] = [
+    { video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false },
+    { video: { facingMode: facing }, audio: false },
+    { video: true, audio: false },
+  ];
+  let last: unknown = null;
+  for (const constraints of attempts) {
     try {
-      track.contentHint = "motion";
-    } catch {
-      /* sem suporte */
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const track = stream.getVideoTracks()[0] as (MediaStreamTrack & { contentHint?: string }) | undefined;
+      if (track) {
+        try {
+          track.contentHint = "motion";
+        } catch {
+          /* sem suporte */
+        }
+      }
+      return stream;
+    } catch (err) {
+      last = err;
+      const name = (err as { name?: string } | null)?.name;
+      if (name === "NotAllowedError" || name === "SecurityError") break;
     }
   }
-  return stream;
+  throw last;
 }
 
 const LEVEL_NAMES = { pt: { alta: "Alta", media: "Média", baixa: "Baixa" }, en: { alta: "High", media: "Medium", baixa: "Low" } };
@@ -199,4 +210,20 @@ const LEVEL_NAMES = { pt: { alta: "Alta", media: "Média", baixa: "Baixa" }, en:
 export function levelLabel(level: ScreenLevel): string {
   const spec = SCREEN_LEVELS[level];
   return `${LEVEL_NAMES[getLang()][level]} · ${spec.height}p${spec.frameRate}`;
+}
+
+// Microfone sintético: tom baixo (modo bot, para testar sem pedir permissão) ou silêncio
+// (entrar só ouvindo quando o microfone foi negado ou não existe).
+export function syntheticMic(ctx: AudioContext, tone: boolean): MediaStream {
+  const dest = ctx.createMediaStreamDestination();
+  if (tone) {
+    const osc = ctx.createOscillator();
+    osc.frequency.value = 300 + Math.round(Math.random() * 400);
+    const gain = ctx.createGain();
+    gain.gain.value = 0.05;
+    osc.connect(gain);
+    gain.connect(dest);
+    osc.start();
+  }
+  return dest.stream;
 }

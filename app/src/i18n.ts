@@ -257,7 +257,11 @@ const M = {
   "msg.noiseOn": ["Supressão de ruído ligada.", "Noise suppression on."],
   "msg.noiseOff": ["Supressão de ruído desligada.", "Noise suppression off."],
   "msg.shareCancelled": ["Compartilhamento cancelado.", "Sharing cancelled."],
-  "msg.cameraFail": ["Não consegui abrir a câmera. Verifique a permissão.", "Couldn't open the camera. Check the permission."],
+  "msg.cameraFail": ["Não consegui abrir a câmera ({err}).", "Couldn't open the camera ({err})."],
+  "msg.cameraDenied": [
+    "A câmera foi bloqueada. No iPhone: Ajustes → (Safari, Chrome ou Brave) → Câmera → Permitir; ou toque em \"aA\" na barra de endereço → Configurações do site. No Android: cadeado na barra de endereço → Permissões.",
+    "The camera is blocked. On iPhone: Settings → (Safari, Chrome or Brave) → Camera → Allow; or tap \"aA\" in the address bar → Website Settings. On Android: the lock icon in the address bar → Permissions.",
+  ],
   "msg.screenNoAudio": [
     "Tela sem som. Para transmitir o som do PC, escolha \"Tela inteira\" e marque \"Compartilhar áudio do sistema\".",
     "Screen without sound. To send your PC's sound, pick \"Entire screen\" and tick \"Share system audio\".",
@@ -270,6 +274,12 @@ const M = {
   "msg.outputOk": ["Saída de áudio trocada.", "Audio output switched."],
   "msg.outputFail": ["Não consegui usar essa saída de áudio em todos os sons.", "Couldn't use that output for every sound."],
   "msg.tray": ["Janela escondida na bandeja; a chamada continua. Clique no ícone para voltar.", "Window hidden in the tray; the call continues. Click the icon to come back."],
+  "msg.listenOnly": ["Sem microfone (negado ou inexistente): entrando só para ouvir.", "No microphone (denied or missing): joining to listen only."],
+  "notice.listenOnly": [
+    "Você entrou só ouvindo (sem microfone). Toque em 🎤 para tentar ligar o microfone.",
+    "You joined to listen only (no microphone). Tap 🎤 to try turning the mic on.",
+  ],
+  "join.otherTab": ["Esta sala foi aberta em outra aba deste navegador; esta aqui saiu da chamada.", "This room was opened in another tab of this browser; this one left the call."],
   "msg.fullscreenFail": ["Este aparelho não deixou abrir em tela cheia.", "This device didn't allow fullscreen."],
 
   // Mini-janela

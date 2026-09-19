@@ -88,6 +88,19 @@ NitroCall relies on free public services:
 
 The room code lives after the `#` in invite links and is never sent to GitHub.
 
+## Where it's been tested
+
+| Device | Browser | How | Result |
+|---|---|---|---|
+| iPhone (iOS 18.7) | Safari, Chrome, Brave | real device, Wi-Fi and 4G, with bots in the room | joins, hears/is heard, 🔒, camera both ways, relay via TURN |
+| Windows | Chrome, Edge | automated suites (200+ checks) and real use | everything |
+| Android | Chrome (engine) | automated, emulated phone profiles | joins, camera, background/return |
+| iPhone/Android | any | automated "WebKit-like" checks (strict ICE config, Safari adapter, blocked Worker) | joins |
+
+Not verified on real hardware yet: Android phones, iPad, Firefox. If something fails there, open the
+link with `&debug=<any-word>` at the end and send the maintainer that word — the app streams its log
+live (encrypted) so the problem can be seen as it happens.
+
 ## Honest limits
 
 - **Designed for 2 to 8 people.** 9–10 works but is experimental: whoever shares a screen

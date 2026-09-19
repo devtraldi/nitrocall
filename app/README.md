@@ -12,6 +12,32 @@ The source also keeps an **optional desktop shell** (Tauri 2, `src-tauri/`) that
 code — tray, anti-sleep, CPU load, file logging, auto-update. It speaks the same protocol, but
 it isn't built or distributed; the sections about it below are for anyone who wants to.
 
+## What's new in 6.2 — phones
+
+- **iPhone never connected (6.0–6.1), fixed.** PeerJS bundles webrtc-adapter, whose Safari shim
+  rewrites `config.iceServers` before creating each connection. 6.0 had made that config a getter
+  (to pick up late TURN credentials); on every iOS browser (all WebKit) the write threw
+  `Attempted to assign to readonly property` and no RTCPeerConnection was ever created. The config
+  is a plain object again, refreshed when TURN credentials arrive. Caught live on a real iPhone.
+- **ICE server self-test** (`src/webrtc/iceCheck.ts`): if the engine refuses the server list, each
+  URL is tried alone and only accepted ones are used (logged).
+- **Unexpected errors reach the diagnostics** (`window.onerror`/`unhandledrejection`), and each tick
+  step is guarded: one exception no longer silently stops the whole room loop.
+- **Mobile data joins in seconds**: a contact whose ICE is progressing gets 25 s instead of being torn
+  down at 8 s (each retry restarted candidate gathering); the own connection restarts ICE at 7 s only
+  once gathering is complete, and the offerer honours an early restart request. Real 4G: 15–60 s → 4 s.
+- **Network probe on join**: a throwaway connection logs how long each path took on this device
+  (host, srflx, relay per protocol) and warms DNS/TURN.
+- **Clock fallback**: if the Web Worker clock stays silent for 2.5 s, timers move to the page.
+- **Camera**: falls back to simpler constraints; the real error and how to allow the camera are shown.
+- **Listen-only** when the microphone is denied/missing; **duplicate tab** of the same room in the same
+  browser: the older one leaves (old iPhone tabs were holding slots); short signaling reconnects no
+  longer flash "Reconnecting…".
+- **Test tools for real devices**: `#debug=<token>` streams the device's log, errors and state over
+  public Nostr relays, encrypted with the token (`node tests/listen.mjs <token>` prints it live);
+  `#bot=<name>&cam=1` joins by itself with a synthetic mic/camera (no permissions);
+  `tests/live.mjs` puts bots (one relay-only, like 4G) in a room of the published site.
+
 ## What's new in 6.1
 
 - **Phones on mobile data connect reliably.** The first contact now waits (up to 3 s) for TURN
@@ -105,6 +131,9 @@ TURN_ALL=1 npm run test:e2e      # every scenario with TURN credentials availabl
 TURN_URL=https://… npm run test:e2e   # use a real credentials Worker instead of the local TURN
 node tests/shots.mjs <dir>       # UI screenshots on iPhone SE, Pixel 7 and desktop (LANG_UI=en)
 node tests/ux.mjs                # UX walkthrough in installed Chrome, desktop + iPhone (HEADLESS=1)
+ONLY=v62 npm run test:e2e        # phone engines: Safari adapter, strict ICE config, dead Worker, radio, bot, listen-only
+SITE=https://…/ ROOM=x TOKEN=t RELAY=1 node tests/live.mjs   # bots in a real room of the published site
+node tests/listen.mjs <token>    # live log of any device that opened the link with #debug=<token>
 ```
 
 "Direct path impossible" is simulated for real at the ICE level: every `RTCPeerConnection` in

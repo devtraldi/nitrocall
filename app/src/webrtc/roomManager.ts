@@ -3,7 +3,8 @@ import { applyScreenLevel, LEVEL_ORDER, SCREEN_LEVELS, type ScreenLevel, type Sc
 import { sha256Bytes, sha256Hex } from "./hash";
 import { DEFAULT_RELAYS, NostrSignaling } from "./nostr";
 import { DEFAULT_TURN_ENDPOINT, TurnCredentials } from "./turn";
-import { clockKind, every } from "./clock";
+import { acceptedIceServers } from "./iceCheck";
+import { clockKind, clockTicks, every } from "./clock";
 import { chooseSendCodec, hwEncoders, mungeVideoSection, probeHwEncoders, screenDegradation } from "./videoPolicy";
 import { BUILD, TARGET, VERSION } from "../buildInfo";
 
@@ -68,6 +69,10 @@ const TICK_MS = 1000;
 // este tempo sem receber nada, o participante é dado como ausente e tudo é refeito.
 const PEER_STALE_MS = 12_000;
 const BOOT_CONNECT_TIMEOUT_MS = 8_000;
+// Contato que está negociando (o outro lado respondeu e o ICE está "checking"): em rede móvel
+// juntar os caminhos (STUN/TURN) pode levar vários segundos; desistir aos 8 s recomeçava tudo
+// do zero, e a entrada pelo 4G levava de 15 s a 1 min. Só desiste se ficar parado até aqui.
+const BOOT_CHECKING_TIMEOUT_MS = 25_000;
 // Ao entrar, espera as credenciais do TURN (no máximo isto) antes do primeiro contato: numa
 // rede móvel (CGNAT) o contato sem TURN falha e a próxima tentativa só viria segundos depois.
 const TURN_WAIT_MS = 3_000;
@@ -77,6 +82,9 @@ const OCCUPIED_SHOW_MS = 90_000;
 // Tempo para uma ligação própria (RTCPeerConnection) chegar a "connected" antes de ser
 // refeita.
 const PC_SETUP_TIMEOUT_MS = 15_000;
+// Primeira negociação que não fechou em 7 s: reinicia o ICE já (em rede móvel a primeira
+// tentativa às vezes emperra e o reinício resolve em segundos; esperar 15 s era demais).
+const PC_FIRST_RESTART_MS = 7_000;
 // ICE "disconnected" é frequentemente transitório (troca de rede, wifi oscilando);
 // só reiniciamos o ICE se persistir.
 const ICE_DISCONNECTED_GRACE_MS = 6_000;
@@ -167,6 +175,10 @@ function validSlot(slot: unknown): slot is number {
 // estatísticas vêm vazias. Guardamos, enquanto ela tenta, que caminhos cada lado ofereceu,
 // os erros de STUN/TURN e os estados — é o que explica por que um celular não conecta.
 interface IceTrace {
+  t0: number;
+  // ms desde a criação até o primeiro candidato de cada tipo (relay: por protocolo).
+  first: Record<string, number>;
+  gatheredMs: number | null;
   local: Record<string, number>;
   remote: Record<string, number>;
   errors: string[];
@@ -177,13 +189,16 @@ const iceTraces = new WeakMap<RTCPeerConnection, IceTrace>();
 
 function traceIce(pc: RTCPeerConnection | null | undefined): void {
   if (!pc || iceTraces.has(pc)) return;
-  const tr: IceTrace = { local: {}, remote: {}, errors: [], states: [], v6: false };
+  const tr: IceTrace = { t0: performance.now(), first: {}, gatheredMs: null, local: {}, remote: {}, errors: [], states: [], v6: false };
   iceTraces.set(pc, tr);
   pc.addEventListener("icecandidate", (e) => {
     const c = e.candidate;
     if (!c?.candidate) return;
     const type = c.type ?? /typ (\w+)/.exec(c.candidate)?.[1] ?? "?";
     tr.local[type] = (tr.local[type] ?? 0) + 1;
+    const proto = (c as RTCIceCandidate & { relayProtocol?: string }).relayProtocol;
+    const key = type === "relay" && proto ? `relay/${proto}` : type;
+    if (tr.first[key] === undefined) tr.first[key] = Math.round(performance.now() - tr.t0);
     if ((c.address ?? "").includes(":")) tr.v6 = true;
   });
   pc.addEventListener("icecandidateerror", (e) => {
@@ -191,6 +206,9 @@ function traceIce(pc: RTCPeerConnection | null | undefined): void {
     const where = ev.url ? `@${ev.url.split("?")[0]}` : "";
     const item = `${ev.errorCode}${where}`;
     if (tr.errors.length < 6 && !tr.errors.includes(item)) tr.errors.push(item);
+  });
+  pc.addEventListener("icegatheringstatechange", () => {
+    if (pc.iceGatheringState === "complete" && tr.gatheredMs === null) tr.gatheredMs = Math.round(performance.now() - tr.t0);
   });
   pc.addEventListener("iceconnectionstatechange", () => {
     if (tr.states.length < 8) tr.states.push(pc.iceConnectionState);
@@ -207,9 +225,14 @@ function iceSummary(pc: RTCPeerConnection): string | null {
   const tr = iceTraces.get(pc);
   if (!tr) return null;
   const count = (m: Record<string, number>) => ["host", "srflx", "prflx", "relay"].map((k) => `${k} ${m[k] ?? 0}`).join(", ");
+  const firsts = Object.entries(tr.first)
+    .sort((a, b) => a[1] - b[1])
+    .map(([k, ms]) => `${k} ${ms}ms`)
+    .join(", ");
   return (
     `estados: ${tr.states.join(">") || pc.iceConnectionState}; locais: ${count(tr.local)}${tr.v6 ? ", IPv6" : ""}; ` +
-    `remotos: ${count(tr.remote)}${tr.errors.length ? `; erros: ${tr.errors.join(" ")}` : ""}`
+    `remotos: ${count(tr.remote)}${firsts ? `; 1º candidato: ${firsts}` : ""}` +
+    `${tr.gatheredMs !== null ? `; coleta completa ${tr.gatheredMs}ms` : ""}${tr.errors.length ? `; erros: ${tr.errors.join(" ")}` : ""}`
   );
 }
 
@@ -1084,6 +1107,7 @@ export class RoomManager {
       build: BUILD,
       target: TARGET,
       clock: clockKind(),
+      ticks: clockTicks(),
       hwEncoders: hwEncoders(),
       codecSkip: [...this.codecSkip],
       cpuLoad: this.cpuLoad,
@@ -1142,20 +1166,56 @@ export class RoomManager {
   // ---------------------------------------------------------------------------
 
   private iceServers(): RTCIceServer[] {
-    return [...STUN_SERVERS, ...this.turn.current()];
+    return acceptedIceServers([...STUN_SERVERS, ...this.turn.current()], (url, why) =>
+      this.callbacks.onStatus(`ICE: este navegador recusou ${url} (${why}); seguindo sem ele.`),
+    );
+  }
+
+  // Exceção inesperada numa etapa: registra (uma vez a cada 30 s por tipo) e segue. Antes,
+  // uma exceção no primeiro contato derrubava o tick inteiro, sem deixar rastro no registro.
+  private readonly errorSeen = new Map<string, number>();
+
+  private reportError(where: string, err: unknown): void {
+    const e = err as { name?: string; message?: string; stack?: string } | null;
+    const msg = `${e?.name ?? "Erro"}: ${e?.message ?? String(err)}`.slice(0, 200);
+    const key = `${where.replace(/\d+/g, "#")}|${msg}`;
+    const now = Date.now();
+    if (now - (this.errorSeen.get(key) ?? 0) < 30_000) return;
+    this.errorSeen.set(key, now);
+    const stack = (e?.stack ?? "")
+      .split("\n")
+      .slice(0, 3)
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .join(" | ")
+      .slice(0, 300);
+    this.callbacks.onStatus(`ERRO em ${where}: ${msg}${stack ? ` [${stack}]` : ""}`);
+  }
+
+  private guard(where: string, fn: () => void): void {
+    try {
+      fn();
+    } catch (err) {
+      this.reportError(where, err);
+    }
+  }
+
+  // Configuração que o PeerJS usa em cada conexão nova. TEM de ser um objeto comum e
+  // gravável: no Safari/iOS o webrtc-adapter (embutido no PeerJS) reescreve
+  // `config.iceServers` antes de criar a conexão; com um getter sem setter isso lançava
+  // "Attempted to assign to readonly property" e o iPhone nunca criava ligação nenhuma
+  // (6.0–6.1). O TURN que chega depois entra por refreshPeerConfig().
+  private readonly peerConfig: RTCConfiguration = { iceServers: [] };
+
+  private refreshPeerConfig(): void {
+    this.peerConfig.iceServers = this.iceServers();
   }
 
   private peerOptions(): PeerJSOption {
-    // O PeerJS lê config a cada conexão nova: o getter entrega o TURN que chegar depois.
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
+    this.refreshPeerConfig();
     return {
       ...(this.serverOpts ?? {}),
-      config: {
-        get iceServers() {
-          return self.iceServers();
-        },
-      },
+      config: this.peerConfig,
     };
   }
 
@@ -1501,27 +1561,27 @@ export class RoomManager {
     const brokerReady = this.brokerReady();
     if (now - this.lastCapAt >= CAP_INTERVAL_MS) {
       this.lastCapAt = now;
-      this.computeCap(now);
+      this.guard("capacidade", () => this.computeCap(now));
     }
     for (const slot of ALL_SLOTS) {
       if (slot === this.mySlot) continue;
       const p = this.getPeer(slot);
-      this.reconcilePresence(p, now);
-      this.reconcileBoot(p, now, brokerReady);
-      this.reconcileConn(p, now);
-      this.reconcileRelayChoice(p, now);
+      this.guard(`presença ${slot}`, () => this.reconcilePresence(p, now));
+      this.guard(`contato ${slot}`, () => this.reconcileBoot(p, now, brokerReady));
+      this.guard(`ligação ${slot}`, () => this.reconcileConn(p, now));
+      this.guard(`ponte ${slot}`, () => this.reconcileRelayChoice(p, now));
       if (this.present(p)) {
-        this.sendState(p);
-        this.reconcileMedia(p, now);
+        this.guard(`estado ${slot}`, () => this.sendState(p));
+        this.guard(`mídia ${slot}`, () => this.reconcileMedia(p, now));
       }
-      this.emitView(p, now);
+      this.guard(`tela ${slot}`, () => this.emitView(p, now));
     }
-    this.reconcileRelays(now);
-    this.reconcilePlan(now);
-    this.reconcileDists(now);
-    this.emitShareStatus();
-    this.emitRoomHealth(now);
-    this.emitSelfHealth();
+    this.guard("pontes", () => this.reconcileRelays(now));
+    this.guard("árvore", () => this.reconcilePlan(now));
+    this.guard("distribuidores", () => this.reconcileDists(now));
+    this.guard("status da tela", () => this.emitShareStatus());
+    this.guard("saúde", () => this.emitRoomHealth(now));
+    this.guard("saúde própria", () => this.emitSelfHealth());
   }
 
   // ---------------------------------------------------------------------------
@@ -2030,7 +2090,12 @@ export class RoomManager {
         p.nextBootAt = now + LOST_PEER_RETRY_MS;
       }
     }
-    if (p.pendingBoot && now - p.pendingBoot.at > BOOT_CONNECT_TIMEOUT_MS) this.failPendingBoot(p, now);
+    if (p.pendingBoot) {
+      const age = now - p.pendingBoot.at;
+      const ice = (p.pendingBoot.conn.peerConnection as RTCPeerConnection | null)?.iceConnectionState;
+      const progressing = ice === "checking" || ice === "connected";
+      if (age > (progressing ? BOOT_CHECKING_TIMEOUT_MS : BOOT_CONNECT_TIMEOUT_MS)) this.failPendingBoot(p, now);
+    }
     const wasPresent = this.present(p) || !!p.state;
     if (wasPresent && now - p.lastSeenAt > PEER_STALE_MS) {
       if (p.via && !this.directOpen(p)) this.relayLost(p, "sem sinal de vida pela ponte");
@@ -2059,10 +2124,18 @@ export class RoomManager {
 
   private connectBoot(p: RemotePeer, now: number): void {
     if (!this.peer) return;
-    const conn = this.peer.connect(peerId(this.hash, p.slot), {
-      serialization: "json",
-      reliable: true,
-    });
+    let conn: DataConnection | undefined;
+    this.refreshPeerConfig();
+    try {
+      conn = this.peer.connect(peerId(this.hash, p.slot), {
+        serialization: "json",
+        reliable: true,
+      });
+    } catch (err) {
+      this.reportError(`abrir contato com a vaga ${p.slot}`, err);
+      p.nextBootAt = now + LOST_PEER_RETRY_MS * 2;
+      return;
+    }
     if (!conn) {
       p.nextBootAt = now + LOST_PEER_RETRY_MS;
       return;
@@ -2101,7 +2174,44 @@ export class RoomManager {
 
   // Credenciais TURN chegaram (ou foram renovadas): quem ainda não tem caminho tenta de novo
   // já, agora com o TURN, em vez de esperar o próximo intervalo.
+  // Uma ligação de teste, só para juntar caminhos (não conecta a ninguém): mede quanto cada
+  // tipo demora nesta rede (rede local, STUN, TURN por UDP/TCP/TLS), registra, e deixa o DNS
+  // e o TURN "aquecidos" para o primeiro contato.
+  private probedNetwork = false;
+
+  private probeNetwork(): void {
+    if (this.probedNetwork || typeof RTCPeerConnection === "undefined") return;
+    this.probedNetwork = true;
+    let pc: RTCPeerConnection;
+    try {
+      pc = new RTCPeerConnection({ iceServers: this.iceServers() });
+    } catch (err) {
+      this.reportError("medir a rede", err);
+      return;
+    }
+    traceIce(pc);
+    pc.createDataChannel("probe");
+    const finish = () => {
+      const summary = iceSummary(pc);
+      if (summary) this.callbacks.onStatus(`REDE: ${summary.replace(/^estados: [^;]*; /, "").replace(/remotos: [^;]*; ?/, "")}`);
+      pc.close();
+    };
+    const timer = setTimeout(finish, 12_000);
+    pc.addEventListener("icegatheringstatechange", () => {
+      if (pc.iceGatheringState === "complete") {
+        clearTimeout(timer);
+        finish();
+      }
+    });
+    void pc
+      .createOffer()
+      .then((o) => pc.setLocalDescription(o))
+      .catch((err) => this.reportError("medir a rede", err));
+  }
+
   private onTurnChange(): void {
+    this.refreshPeerConfig();
+    if (this.turn.status().state === "ok") this.probeNetwork();
     const st = this.turn.status();
     const line = st.state === "ok" ? `TURN: credenciais prontas (${st.urls} endereços).` : `TURN: sem credenciais (${st.error || st.state}).`;
     if (line !== this.turnLogged) {
@@ -2224,7 +2334,15 @@ export class RoomManager {
   // ---------------------------------------------------------------------------
 
   private newConn(gen: number, offerer: boolean, now: number): Conn {
-    const pc = new RTCPeerConnection({ iceServers: this.iceServers() });
+    let pc: RTCPeerConnection;
+    try {
+      pc = new RTCPeerConnection({ iceServers: this.iceServers() });
+    } catch (err) {
+      // Nunca deveria acontecer depois do autoteste; se acontecer, fica registrado e a
+      // ligação sai só com o STUN padrão do navegador.
+      this.reportError("criar ligação", err);
+      pc = new RTCPeerConnection();
+    }
     traceIce(pc);
     return {
       gen,
@@ -2512,6 +2630,9 @@ export class RoomManager {
       } else if (cs !== "connected") {
         c.disconnectedSince = 0;
         if (now - c.createdAt > PC_SETUP_TIMEOUT_MS) this.recoverConn(p, c, now, "ligação não completou");
+        else if (!c.everConnected && c.restarts === 0 && now - c.createdAt > PC_FIRST_RESTART_MS && c.pc.iceGatheringState === "complete") {
+          this.recoverConn(p, c, now, "ligação demorando");
+        }
       } else {
         c.disconnectedSince = 0;
         if (c.stalled) this.recoverConn(p, c, now, "áudio parou de chegar");
@@ -2675,6 +2796,19 @@ export class RoomManager {
         } catch {
           /* ignora */
         }
+      }
+      return;
+    }
+    // Ainda ligando, mas já passou do tempo normal: o outro lado pediu, reinicia o ICE uma vez
+    // (antes o pedido era ignorado até 15 s e a entrada pelo 4G levava 15–20 s).
+    if (c && !c.everConnected && c.restarts === 0 && now - c.createdAt >= PC_FIRST_RESTART_MS && now - c.lastRestartAt > ICE_RESTART_MIN_INTERVAL_MS) {
+      c.restarts += 1;
+      c.lastRestartAt = now;
+      this.callbacks.onStatus(`${this.peerName(p)}: ligação demorando (pedido do outro lado); reiniciando o ICE.`);
+      try {
+        c.pc.restartIce();
+      } catch {
+        /* ignora */
       }
       return;
     }
