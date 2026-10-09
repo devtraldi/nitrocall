@@ -1,0 +1,51 @@
+# Watches this month's TURN traffic (Cloudflare free tier: 1,000 GB) and emails via GitHub issues.
+# The Worker (cloudflare/turn-worker) measures it hourly and stops handing out TURN credentials
+# at 900 GB by itself; this only tells the maintainer in advance.
+name: TURN usage
+
+on:
+  schedule:
+    - cron: "30 9 * * *" # daily, 09:30 UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check usage and alert
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          u=$(curl -sf https://nitrocall-turn.devtraldi.workers.dev/usage)
+          echo "$u"
+          month=$(jq -r .month <<<"$u")
+          owner="${GH_REPO%%/*}"
+
+          open_once() { # title, body: opens the issue only if it doesn't exist yet
+            if [ -z "$(gh issue list --state all --search "\"$1\" in:title" --json number --jq '.[0].number')" ]; then
+              gh issue create --title "$1" --body "$2" --assignee "$owner"
+            fi
+          }
+
+          if [ "$(jq -r '.unknown // false' <<<"$u")" = "true" ]; then
+            open_once "TURN monitor without data ($month)" "The Worker has no measurement for $month. Check the \`CF_ANALYTICS_TOKEN\` secret (\`npx wrangler secret put CF_ANALYTICS_TOKEN\` in \`cloudflare/turn-worker\`) and the Worker's cron logs."
+            exit 0
+          fi
+
+          eg=$(jq -r .egressGB <<<"$u"); ing=$(jq -r .ingressGB <<<"$u"); cap=$(jq -r .capGB <<<"$u")
+          echo "### TURN $month: ${eg} GB egress, ${ing} GB ingress (cap ${cap} GB, free 1,000 GB)" >> "$GITHUB_STEP_SUMMARY"
+
+          for t in 100 250 500 750 900; do
+            if awk "BEGIN{exit !($eg >= $t)}"; then
+              open_once "TURN ≥ $t GB ($month)" "This month's TURN traffic: **${eg} GB egress** (+ ${ing} GB ingress), measured $(jq -r .checkedAt <<<"$u").
+
+          - Free tier: 1,000 GB/month; after that US\$0.05/GB.
+          - At ${cap} GB the Worker stops handing out TURN credentials until next month (direct links and friend bridges keep working).
+          - Turn TURN off now: \`npx wrangler secret put DISABLED\` with value \`1\` in \`cloudflare/turn-worker\`."
+            fi
+          done
